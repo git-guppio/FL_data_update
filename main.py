@@ -83,6 +83,19 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(right_label)
         
         self.log_list = QListWidget()
+
+        # Imposta altezza uniforme per tutti gli elementi
+        self.log_list.setUniformItemSizes(True)
+        
+        # Imposta spaziatura tra gli elementi
+        self.log_list.setSpacing(2)  # 2 pixel di spazio tra le righe
+        
+        # Imposta font più leggibile (opzionale)
+        font = self.log_list.font()
+        font.setPointSize(9)  # Aumenta dimensione font
+        self.log_list.setFont(font)
+
+
         right_panel.addWidget(self.log_list)
 
         # Attiva il menu contestuale per il widget dei log
@@ -158,24 +171,32 @@ class MainWindow(QMainWindow):
 
     def log_message(self, message, icon_type='info'):
         """
-        Aggiunge un messaggio al log con un'icona Qt
+        Aggiunge un messaggio al log senza icone
         """
         item = QListWidgetItem(message)
-        
-        # Imposta l'icona in base al tipo
-        if icon_type == 'info':
-            item.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxInformation))
-        elif icon_type == 'error':
-            item.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxCritical))
-        elif icon_type == 'success':
-            item.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
-        elif icon_type == 'warning':
-            item.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxWarning))
-        elif icon_type == 'loading':
-            item.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
-        
         self.log_list.addItem(item)
         self.log_list.scrollToBottom()
+
+    # def log_message(self, message, icon_type='info'):
+    #     """
+    #     Aggiunge un messaggio al log con un'icona Qt
+    #     """
+    #     item = QListWidgetItem(message)
+        
+    #     # Imposta l'icona in base al tipo
+    #     if icon_type == 'info':
+    #         item.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxInformation))
+    #     elif icon_type == 'error':
+    #         item.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxCritical))
+    #     elif icon_type == 'success':
+    #         item.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
+    #     elif icon_type == 'warning':
+    #         item.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxWarning))
+    #     elif icon_type == 'loading':
+    #         item.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        
+    #     self.log_list.addItem(item)
+    #     self.log_list.scrollToBottom()
 
 
     """ 
@@ -230,7 +251,7 @@ class MainWindow(QMainWindow):
                     if 'Mask_gen' not in fl_dictionary:
                         fl_dictionary['Mask_gen'] = pd.DataFrame()
                     # Aggiungi la riga al DataFrame
-                    new_row = pd.DataFrame({'FL': [line]})
+                    new_row = pd.DataFrame({"Sede tecnica": [line]})
                     fl_dictionary['Mask_gen'] = pd.concat([fl_dictionary['Mask_gen'], new_row], ignore_index=True)
                 elif ('*' in line) and (re.match(patterns['Mask_star'], line)):
                     # aggiungi una nuova chiave al df
@@ -310,7 +331,10 @@ class MainWindow(QMainWindow):
                             if key != 'Mask_gen':
                             # Esamino i valori di FL contenuti nel dizionario
                                 self.log_message("Inizio estrazione dati FL contenenti *", 'loading')
+                                
+                                ### Estraggo tutte le FL che corrispondono all FL con * contenuta come chiave
                                 success, df = extractor.extract_FL_list(key)
+                                
                                 if success:
                                     # Aggiungo i dati ottenuti al dizionario con chiave 'Mask_star'                                    
                                     self.fl_dictionary[key] = df
@@ -322,6 +346,7 @@ class MainWindow(QMainWindow):
                         for key in self.fl_dictionary.keys():
                             self.log_message("Inizio estrazione dati lista FL", 'loading') 
                             
+                            ### Estraggo i dati delle FL per ciascuna lista relativa ad una chiave
                             success, df = extractor.extract_FL_IFLO(self.fl_dictionary[key])
                             
                             if success:
@@ -332,9 +357,11 @@ class MainWindow(QMainWindow):
                                     self.fl_df_tot = pd.concat([self.fl_df_tot, df], ignore_index=True)
                             else:
                                 self.log_message(f"Errore durante l'estrazione delle FL", 'error')
+                                return
 
                         self.log_message("Estrazioni completata con successo", 'success')
                         self.log_message(f"Totale FL estratte = {len(self.fl_df_tot)}", 'success')
+                        # Creo il nome del file per salvare i dati
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         file_Excel = f"FL_estratte_" + timestamp + ".xlsx"
                         self.log_message(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
@@ -351,33 +378,33 @@ class MainWindow(QMainWindow):
                         ### Verifico che il df  contenga fl con lingua attualmente in uso nella sessione di SAP
                         result, df_filtrato = self.Check_Lang(self.fl_df_tot, self.infoLanguage)
                         if result:
-                            df_filtrato["Modificata FL"] = "" # Creo la colonna per contenere l'esito della modifica
-                            count_ok = 0
-                            for index, row in df_filtrato.iterrows():
-                                # Modifico la descrizione della FL con un testo fittizio
-                                fl = df_filtrato.at[index, "Sede tecnica"].strip()
-                                descrizione = df_filtrato.at[index, "Definizione della sede tecnica"].strip()
                                 
-                                success, text = extractor.modify_FL(fl, descrizione)
-                                
-                                df_filtrato.at[index, "Modificata FL"] = text
-                                if success:
-                                    count_ok += 1
-                        # stampo i risultati 
-                        self.log_message(f"Aggiornate con successo: {count_ok} FL", 'success')
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        file_Excel = f"FL_aggiornate_" + timestamp + ".xlsx"
-                        self.log_message(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
-                        # Salvo il DataFrame in un file Excel
-                        if self.save_excel_file_advanced(self.fl_df_tot, file_Excel,
-                                                        sheet_name='Dati_modificati',
-                                                        index=False,
-                                                        overwrite=True):
-                            self.log_message("File Excel salvato con successo", 'success')
-                        else:
-                            self.log_message("Errore durante il salvataggio del file Excel", 'error')   
+                                ### Aggiorno i valori delle fl contenute nel df
+                                success, df_result = extractor.update_FL(df_filtrato)
 
-           
+                                if success:
+                                    # creo una statistica degli aggiornamenti eseguiti
+                                    result_stat = self.analyze_result(df_result)          
+
+                                    # Creo il nome del file per salvare i dati
+                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    file_Excel = f"FL_aggiornate_" + timestamp + ".xlsx"
+                                    self.log_message(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
+                                    # Salvo il DataFrame in un file Excel
+                                    if self.save_excel_file_advanced(df_result, file_Excel,
+                                                                    sheet_name='Dati_modificati',
+                                                                    index=False,
+                                                                    overwrite=True):
+                                        self.log_message("File Excel salvato con successo", 'success')
+                                    else:
+                                        self.log_message("Errore durante il salvataggio del file Excel", 'error')
+                                else:
+                                    self.log_message("Errore durante l'aggiornamento delle fl", 'error')                           
+                        else:
+                            self.log_message("Errore durante l'elaborazione del df", 'error')
+
+                    self.log_message("Elaborazione terminata", 'success')
+
                 else:
                     self.log_message("Connessione SAP NON attiva", 'error')
                     return
@@ -390,9 +417,46 @@ class MainWindow(QMainWindow):
         # ---------------------------------------------------- 
         self.extract_button.setEnabled(True)
 
+    #-----------------------------------------------------------------------------
+    # Genera una statistica dei risultati
+    #-----------------------------------------------------------------------------
+
+    def analyze_result(self, df :pd.DataFrame) -> bool:
+        """
+        Analizza i caratteri nella colonna Result e calcola le percentuali
+        """
+        # Verifica che la colonna esista
+        if "Result" not in df.columns:
+            print("\n❌ Colonna 'Result' non trovata")
+            return False
+        
+        # Conta tutti i caratteri (escludendo NaN)
+        all_chars = df["Result"].dropna().astype(str)
+        total_values = len(all_chars)
+        
+        if total_values == 0:
+            print("\n⚠️ Nessun valore valido nella colonna Result")
+            return False
+        
+        # Conta la frequenza di ogni carattere
+        char_counts = all_chars.value_counts()
+        
+        print(f"\n📊 Analisi caratteri colonna 'Result' ({total_values} valori totali):")
+        print("-" * 50)
+        
+        for char, count in char_counts.items():
+            percentage = (count / total_values) * 100
+            print(f"'{char}': {count:>4} occorrenze ({percentage:>5.1f}%)")
+        
+        return True        
+
+    #-----------------------------------------------------------------------------
+    # Filtra il df in base alla lingua indicata
+    #-----------------------------------------------------------------------------
+
     def Check_Lang(self, df: pd.DataFrame, lang: str) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
-        Verifica se il DataFrame contiene dati nella lingua specificata
+        Filtra il DataFrame contiene dati nella lingua specificata
         
         Args:
             df (pd.DataFrame): DataFrame da verificare
@@ -400,7 +464,11 @@ class MainWindow(QMainWindow):
             
         Returns:
             bool: True se la lingua è presente, False altrimenti
+            df_filtrato (pd.DataFrame): DataFrame filtrato con i soli valori appartenenti alla lingua indicata
         """
+        
+        self.log_message(f"✅ Lingua selezionata: {lang_login_normalized}", 'success')
+                         
         try:
             if 'L_1' not in df.columns:
                 raise KeyError("Colonna 'L_1' non presente")

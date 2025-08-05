@@ -1,0 +1,12 @@
+* Scopo del programma
+
+# Se sono modificati i valori nella tabella CTR_ASS la modifiche non vengono atuomaticamente lette (non si propagnano) nelle tabelle
+che riportano la descrizione delle FL (ad esempio la tab IFLO)
+Per peremettere che i dati siano aggiornati è necessario entrare in modifica in una FL con la transazione IL02 e aggiornare un campo (come ad esempio la descrizione) e salvare i dati.
+In tal modo i dati vengono riletti e aggiornati.
+
+# Il programma provvede ad estrarre le FL tramite transazione IH06 per permettere di specificare FL anche con il carattere * e successivamente per ogni FL inserita procede alla modifica falsa della descrizione (inserisce nel campo la stessa)
+e successivamente salva i dati.
+
+Al termine della modifica i dati vengono salvati su un file excel che riporta i dati prima e dopo della modifica
+

@@ -245,7 +245,7 @@ class SAPDataExtractor:
                 fl_data = self.clipboard_data()
                 if fl_data is None:
                     raise ValueError(f"Nessun dato presente nella clipboard")
-                result, df_fl = self.clean_data(fl_data)
+                result, df_fl = self.clean_data(fl_data) # elimino le prime due righe durante la pulizia dei dati
                 if not result:
                     raise ValueError(f"Errore durante la pulizia dei dati della FL {fl}")
                 else:
@@ -267,7 +267,7 @@ class SAPDataExtractor:
                 - df: dataframe contenente le informazioni estratte
         """
            # copio i dati contenuti nel df nella clipboard
-        if not self.copy_values_for_sap_selection(d_fl):
+        if not self.copy_values_for_sap_selection(d_fl[["Sede tecnica"]]):
             return False, None
            # Se la copia dei dati è andata a buon fine, procedo con l'estrazione
         try:
@@ -384,66 +384,110 @@ class SAPDataExtractor:
             self.log_message(f"Errore durante l'estrazione delle informazioni da FL:\n{str(e)}")
             return False, None
 
-    def modify_FL(self, fl: str, descrizione: str) -> Tuple[bool, Optional[str]]:
+    def update_FL(self, df_input: pd.DataFrame) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
         Modifica le informazioni della Functional Location
         Args:
-            fl (str): Codice Functional Location
-            descrizione (str): Nuova descrizione della Functional Location
+            df (dataframe): Dataframe contenente le FL da aggiornare
             
         Returns: 
                 - bool: True se estrazione riuscita, False altrimenti
-                - str: Messaggio di successo o errore
         """
         try:
+            
+            # ✅ Crea una copia esplicita per evitare il warning
+            df = df_input.copy()
 
-            self.session.findById("wnd[0]/tbar[0]/okcd").text = "/nIL02"
-            self.session.findById("wnd[0]").sendVKey(0)
-            time.sleep(0.5)
-            # Inserisco la FL da modificare
-            self.session.findById("wnd[0]/usr/ctxtIFLO-TPLNR").text = fl
-            # Avvio transazione
-            self.session.findById("wnd[0]").sendVKey(0)
-            time.sleep(0.5)
-            # inserisco descrizione
-            self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text = descrizione
-            self.session.findById("wnd[0]").sendVKey(0)
-            # Salvo i dati
-            self.session.findById("wnd[0]/tbar[0]/btn[11]").press()
-            time.sleep(0.5)
-            # Verifico icona della status bar
-                # verifico l'icona che compare nella status bar
-                # Il valore restituito dovrebbe indicare il tipo di icona mostrata:
-                #     - 'S' o 'SUCCESS' per il simbolo di successo (✓)
-                #     - 'W' o 'WARNING' per l'icona di avviso (⚠)
-                #     - 'E' o 'ERROR' per l'icona di errore (❌)
-                #     - 'I' o 'INFO' per l'icona informativa (ℹ)
-            try:
-                iconType = self.session.findById("wnd[0]/sbar").MessageType
-                if iconType != 'S':
-                    self.log_message("Errore nella modifica FL {fl}", "error")
-                    return False, "Errore nella modifica della FL"
-                else:
-                    return True, "FL modificata"     
-            except Exception as e:
-                self.log_message(f"Errore durante la lettura del tipo di icona nella status bar: {str(e)}", "error")
-                return False, e       
-   
+            # Creo nuove colonne per memorizzare i nuovi dati
+            df["Result"] = "" # Creo la colonna per contenere l'esito della modifica ricavato dalla icona della status bar
+            df["Result_txt"] = "" # Creo la colonna per contenereil msg della status bar         
+            # Colonne per verificare se i dati vengono aggiornati
+            df["N_Tipologia"] = ""
+            df["N_Componente"] = ""
+            df["N_Sezione"] = ""
+            df["N_Tipo_ogg."] = ""
+
+            count_ok = 0
+            for index, row in df.iterrows():
+                # Considero la Fl per ogni riga
+                fl = df.at[index, "Sede tecnica"].strip()
+                descrizione = df.at[index, "Definizione della sede tecnica"].strip()
+                
+                ### Modifico i dati per aggiornare i valori di ogni singola FL
+                self.session.findById("wnd[0]/tbar[0]/okcd").text = "/nIL02"
+                self.session.findById("wnd[0]").sendVKey(0)
+                time.sleep(0.5)
+                # Inserisco la FL da modificare
+                self.session.findById("wnd[0]/usr/ctxtIFLO-TPLNR").text = fl
+                # Avvio transazione
+                self.session.findById("wnd[0]").sendVKey(0)
+                time.sleep(0.5)               
+                # inserisco descrizione
+                self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text = descrizione
+                self.session.findById("wnd[0]").sendVKey(0)
+                time.sleep(0.5)
+                # Inseirsco i valori letti dopo l'aggiornamento
+                df.loc[index, "N_Tipo_ogg."] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102A:SAPLITO0:1020/subSUB_1020A:SAPLITO0:1025/ctxtITOB-EQART").text
+                df.loc[index, "N_Tipologia"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SIST").text                    
+                df.loc[index, "N_Componente"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_PARTE").text
+                df.loc[index, "N_Sezione"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SEZ_PM").text                 
+
+                # Salvo i dati
+                self.session.findById("wnd[0]/tbar[0]/btn[11]").press()
+
+                # Verifico icona della status bar
+                    # verifico l'icona che compare nella status bar
+                    # Il valore restituito dovrebbe indicare il tipo di icona mostrata:
+                    #     - 'S' o 'SUCCESS' per il simbolo di successo (✓)
+                    #     - 'W' o 'WARNING' per l'icona di avviso (⚠)
+                    #     - 'E' o 'ERROR' per l'icona di errore (❌)
+                    #     - 'I' o 'INFO' per l'icona informativa (ℹ)
+                try:
+                    iconType = self.session.findById("wnd[0]/sbar").MessageType
+                    # Inserisco l'esito dell'aggiornamento
+                    df["Result"] = iconType
+                    df["Result_txt"] = self.session.findById("wnd[0]/sbar").text                    
+                    if iconType != 'S':
+                        self.log_message("Errore nella modifica FL {fl}", "error")                   
+                except Exception as e:
+                    # Se si verifica un errore nella lettura della icona allora inserisco il caratere X e testo "Errore nella lettura dell'icona"
+                    # Inserisco l'esito dell'aggiornamento
+                    df["Result"] = "X"
+                    df["Result_txt"] = "Errore nella lettura dell'icona"
+                    self.log_message(f"Errore durante la lettura del tipo di icona nella status bar: {str(e)}", "error")
+            
+            # Se sono state aggiornate tutte le righe restituisco True e il df
+            return True, df
+        
         except Exception as e:  
             self.log_message(f"Errore durante la modifica della FL {fl}: \n{str(e)}")
-            return False, f"Errore: {str(e)}"
-        
+            return False, None
+
 #-----------------------------------------------------------------------------
 # Metodi per la gestione della clipboard
 #-----------------------------------------------------------------------------
 
-    def clean_data(self, data) -> Tuple[bool, Optional[pd.DataFrame]]:
+    def clean_data(self, data: str) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
-        Legge i dati dalla clipboard, rimuove le righe di separazione e le colonne vuote,
-        e gestisce le intestazioni duplicate.
+        Pulisce e normalizza i dati di input per creare un DataFrame utilizzabile.
         
+        La funzione esegue le seguenti operazioni:
+        - Filtra le righe mantendo solo quelle che inizianon con il carrattere "|"
+        - Elimina colonne completamente vuote
+        - Gestisce intestazioni duplicate aggiungendo suffissi
+        - Normalizza spazi e caratteri speciali
+        
+        Args:
+            data (str): Stringa contenente i dati grezzi (tipicamente da SAP o clipboard)
+            
         Returns:
-            DataFrame Pandas pulito o False in caso di errore
+            Tuple[bool, Optional[pd.DataFrame]]: Risultato dell'operazione:
+                - (True, DataFrame): Se la pulizia è riuscita
+                - (False, None): Se si sono verificati errori
+                
+        Raises:
+            Nessuna eccezione viene propagata - tutti gli errori sono catturati 
+            e restituiti come (False, None)
         """
         try:
             # Controlla se i dati sono presenti
@@ -451,23 +495,36 @@ class SAPDataExtractor:
                 raise ValueError(f"Nessun dato trovato")
             # Controlla se i dati sono sufficienti
             all_lines = data.strip().split('\n')
-            if len(all_lines) <= 3:
-                raise ValueError(f"Il file deve contenere almeno 4 righe, trovate solo {len(all_lines)}")      
-
-            # Divide in righe
-            lines = all_lines[2:]  # Salta le prime tre righe che sono intestazioni
+            # if len(all_lines) <= 3:
+            #     raise ValueError(f"Il file deve contenere almeno 4 righe, trovate solo {len(all_lines)}")      
             
-            # Filtra le righe, escludendo quelle che contengono solo trattini
+            # Filtra le righe, mantenendo solo quelle che iniziano con "|"
+            righe_iniziali = len(all_lines)
             clean_lines = []
-            for line in lines:
-                # Rimuove spazi bianchi iniziali e finali
-                line = line.strip()
-                # Verifica se la riga è composta solo da trattini
-                if line and not all(c == '-' for c in line.replace(' ', '')):
-                    clean_lines.append(line)
-
-            if not clean_lines:
-                print("Nessuna riga valida trovata dopo la pulizia")
+            try:
+                for i, line in enumerate(all_lines):
+                    line = line.strip()
+                    
+                    if line.startswith('|'): 
+                        clean_lines.append(line) 
+                    elif line:  # Se la riga non è vuota ma non inizia con |, log per debug
+                        print(f"🔍 Riga {i} saltata: '{line[:50]}...'")
+                        
+                if not clean_lines:
+                    print("⚠️ Nessuna riga valida trovata (che inizi con '|')")
+                    return False, None
+                else:
+                    # Conta righe dopo il filtraggio
+                    righe_finali = len(clean_lines)
+                    righe_rimosse = righe_iniziali - righe_finali
+                    print(f"📊 Statistiche filtraggio:")
+                    print(f"   🔢 Righe iniziali: {righe_iniziali}")
+                    print(f"   ✅ Righe mantenute: {righe_finali}")  
+                    print(f"   ❌ Righe rimosse: {righe_rimosse}")
+                    
+            except Exception as e:
+                print(f"❌ Errore durante il filtraggio righe: {e}")
+                clean_lines = []
                 return False, None
 
             # Dividi le righe in colonne usando il tab come separatore
@@ -620,7 +677,7 @@ class SAPDataExtractor:
         Copia valori formattati nella clipboard per utilizzarli in un campo di selezione multipla SAP.
         
         Args:
-            values: DataFrame
+            values: DataFrame o Serie pandas
         """
         try:
             # Gestione DataFrame pandas
@@ -630,9 +687,10 @@ class SAPDataExtractor:
                     return False
                 # Estrai valori dal DataFrame
                 values_list = values.values.flatten().tolist()
-            
-            # Filtra valori validi
-            valid_values = [str(value) for value in values_list if pd.notna(value) and str(value).strip()]
+            # Filtra i valori escludendo i vuoti e quelli composti da soli spazi          
+            filtered_values = [str(value) for value in values_list if pd.notna(value) and str(value).strip()]
+            # Rimuove gli spazi dal valori ottenuti nel punto precedente
+            valid_values = [value.strip() for value in filtered_values]
             
             # Converte la lista in una stringa per la clipboard
             text = '\r\n'.join(valid_values)
