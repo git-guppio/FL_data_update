@@ -384,7 +384,9 @@ class MainWindow(QMainWindow):
 
                                 if success:
                                     # creo una statistica degli aggiornamenti eseguiti
-                                    result_stat = self.analyze_result(df_result)          
+                                    result_stat = self.analyze_result(df_result)   
+
+                                    df_result = self.check_modifications_detailed(df_result)       
 
                                     # Creo il nome del file per salvare i dati
                                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -416,6 +418,61 @@ class MainWindow(QMainWindow):
         # Verifica completata - ripristino il tasto di estrazione dei dati
         # ---------------------------------------------------- 
         self.extract_button.setEnabled(True)
+
+
+    #-----------------------------------------------------------------------------
+    # Genera una statistica dei risultati
+    #-----------------------------------------------------------------------------
+        
+    def check_modifications_detailed(self, df):
+        """
+        Rileva e documenta le modifiche dei dati confrontando coppie di colonne correlate.
+        """
+        
+        column_mapping = {
+            'N_Tipologia': 'Tipologia',
+            'N_Componente': 'Componente', 
+            'N_Sezione': 'Sezione',
+            'N_Tipo ogg.': 'Tipo ogg.',
+            'N_Prof.cat.': 'Prof.cat.'
+        }
+        
+        # Inizializza colonne
+        df['Check'] = 0
+        df['Modified_Fields'] = ''
+        
+        # Verifica esistenza colonna Result
+        if 'Result' not in df.columns:
+            print("⚠️ Colonna 'Result' non trovata")
+            return df
+        
+        # Filtro per Result='S'
+        mask_result_s = df['Result'].astype(str).str.contains('S', na=False)
+        
+        print(f"📊 Analisi: {len(df)} righe totali, {mask_result_s.sum()} con Result='S'")
+        
+        # Processa solo le righe con Result='S'
+        for index in df[mask_result_s].index:
+            row = df.loc[index]
+            modified_fields = []
+            
+            for new_col, old_col in column_mapping.items():
+                new_val = str(row[new_col]).strip() if pd.notna(row[new_col]) else ''
+                old_val = str(row[old_col]).strip() if pd.notna(row[old_col]) else ''
+                
+                if new_val != old_val:
+                    modified_fields.append(f"{old_col}: '{old_val}' → '{new_val}'")
+            
+            if modified_fields:
+                df.at[index, 'Check'] = 1
+                df.at[index, 'Modified_Fields'] = '; '.join(modified_fields)
+            else:
+                df.at[index, 'Modified_Fields'] = 'Nessuna modifica'
+        
+        # Per le righe che NON hanno Result='S', imposta messaggio specifico
+        df.loc[~mask_result_s, 'Modified_Fields'] = 'Non elaborata (Result≠S)'
+        
+        return df
 
     #-----------------------------------------------------------------------------
     # Genera una statistica dei risultati
@@ -467,7 +524,7 @@ class MainWindow(QMainWindow):
             df_filtrato (pd.DataFrame): DataFrame filtrato con i soli valori appartenenti alla lingua indicata
         """
         
-        self.log_message(f"✅ Lingua selezionata: {lang_login_normalized}", 'success')
+        self.log_message(f"✅ Lingua selezionata: {lang}", 'success')
                          
         try:
             if 'L_1' not in df.columns:

@@ -405,7 +405,8 @@ class SAPDataExtractor:
             df["N_Tipologia"] = ""
             df["N_Componente"] = ""
             df["N_Sezione"] = ""
-            df["N_Tipo_ogg."] = ""
+            df["N_Tipo ogg."] = ""
+            df["N_Prof.cat."] = ""
 
             count_ok = 0
             for index, row in df.iterrows():
@@ -426,12 +427,41 @@ class SAPDataExtractor:
                 self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text = descrizione
                 self.session.findById("wnd[0]").sendVKey(0)
                 time.sleep(0.5)
-                # Inseirsco i valori letti dopo l'aggiornamento
-                df.loc[index, "N_Tipo_ogg."] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102A:SAPLITO0:1020/subSUB_1020A:SAPLITO0:1025/ctxtITOB-EQART").text
-                df.loc[index, "N_Tipologia"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SIST").text                    
-                df.loc[index, "N_Componente"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_PARTE").text
-                df.loc[index, "N_Sezione"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SEZ_PM").text                 
-
+                # Verifico che non venga generato un errore leggendo l'icona
+                try:
+                    iconType = self.session.findById("wnd[0]/sbar").MessageType
+                    if iconType != "":
+                        self.log_message(f"Errore nella modifica FL {fl}", "error")
+                        df.loc[index, "Result"] = iconType
+                        df.loc[index, "Result_txt"] = self.session.findById("wnd[0]/sbar").text        
+                        # Esamino la fl successiva            
+                        continue        
+                except Exception as e:
+                    # Se si verifica un errore nella lettura della icona allora inserisco il caratere X e testo "Errore nella lettura dell'icona"
+                    # Inserisco l'esito dell'aggiornamento
+                    df.loc[index, "Result"] = "X"
+                    df.loc[index, "Result_txt"] = "Errore durante modifica"
+                    self.log_message(f"Errore durante la lettura status bar: {str(e)}", "error")               
+                
+                # Leggo i valori dei campi 
+                try:
+                    # Inseirsco i valori letti dopo l'aggiornamento
+                    df.loc[index, "N_Tipo ogg."] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102A:SAPLITO0:1020/subSUB_1020A:SAPLITO0:1025/ctxtITOB-EQART").text
+                    df.loc[index, "N_Tipologia"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SIST").text                    
+                    df.loc[index, "N_Componente"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_PARTE").text
+                    df.loc[index, "N_Sezione"] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SEZ_PM").text                 
+                    # Cambio scheda per leggere il valore del "Prof.catalogo"
+                    self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\03").select()
+                    time.sleep(0.25)
+                    df.loc[index, "N_Prof.cat."] = self.session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\03/ssubSUB_DATA:SAPLITO0:0102/subSUB_0102B:SAPLITO0:1062/ctxtITOB-RBNR").text
+                except Exception as e:
+                    # Se si verifica un errore nella lettura della icona allora inserisco il caratere X e testo "Errore nella lettura dell'icona"
+                    # Inserisco l'esito dell'aggiornamento
+                    df.loc[index, "Result"] = "X"
+                    df.loc[index, "Result_txt"] = "Errore nella lettura dei valori"
+                    self.log_message(f"Errore lettura dei valori per la FL: {fl}", "error")
+                    # Esamino la fl successiva
+                    continue                             
                 # Salvo i dati
                 self.session.findById("wnd[0]/tbar[0]/btn[11]").press()
 
@@ -445,16 +475,16 @@ class SAPDataExtractor:
                 try:
                     iconType = self.session.findById("wnd[0]/sbar").MessageType
                     # Inserisco l'esito dell'aggiornamento
-                    df["Result"] = iconType
-                    df["Result_txt"] = self.session.findById("wnd[0]/sbar").text                    
+                    df.loc[index, "Result"] = iconType
+                    df.loc[index, "Result_txt"] = self.session.findById("wnd[0]/sbar").text                    
                     if iconType != 'S':
-                        self.log_message("Errore nella modifica FL {fl}", "error")                   
+                        self.log_message(f"Errore salvataggio dati FL: {fl}", "error")                   
                 except Exception as e:
                     # Se si verifica un errore nella lettura della icona allora inserisco il caratere X e testo "Errore nella lettura dell'icona"
                     # Inserisco l'esito dell'aggiornamento
-                    df["Result"] = "X"
-                    df["Result_txt"] = "Errore nella lettura dell'icona"
-                    self.log_message(f"Errore durante la lettura del tipo di icona nella status bar: {str(e)}", "error")
+                    df.loc[index, "Result"] = "X"
+                    df.loc[index, "Result_txt"] = "Errore nella lettura dell'icona"
+                    self.log_message(f"Errore durante la lettura status bar: {str(e)}", "error")
             
             # Se sono state aggiornate tutte le righe restituisco True e il df
             return True, df
