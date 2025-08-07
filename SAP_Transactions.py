@@ -54,33 +54,33 @@ class SAPDataExtractor:
         self.SAP_MESSAGES = {
             'B_IH06_no_data_result': {
                 'IT': "Non sono stati selezionati oggetti",
-                'EN': "",
-                'PT': "",
-                'ES': ""
+                'EN': "No objects were selected",
+                'PT': "Nenhum objeto selecionado",
+                'ES': "No se ha seleccionado ningún objeto"
             },
             'W_IH06_multiple_data_result': {
                 'IT': "Visualizzare sede tecnica: lista sedi tecniche",
-                'EN': "",
-                'PT': "",
-                'ES': ""
+                'EN': "Display Functional Location: Functional Location List",
+                'PT': "Exibir loc.instalação: Lista de locs.instalação",
+                'ES': "Visualizar ubicación técnica: Lista de ubicaciones técnicas"
             },
             'W_IH06_single_data_result': {
                 'IT': "Visualizzare sede tecnica: Dati anagrafici",
-                'EN': "",
-                'PT': "",
-                'ES': ""
+                'EN': "Display Functional Location: Master Data",
+                'PT': "Exibir loc.instalação: Dados mestre",
+                'ES': "Visualizar ubicación técnica: Datos maestros"
             },
             'W_IFLO_selection_view': {
                 'IT': "Data Browser: tabella IFLO: videata di selezione",
-                'EN': "",
-                'PT': "",
-                'ES': ""
+                'EN': "Data Browser: Table IFLO: Selection Screen",
+                'PT': "Data Browser: tabela IFLO: tela de seleção",
+                'ES': "Browser de datos: Tabla IFLO, imagen de selección"
             },
             'W_IFLO_data_result': {
                 'IT': r"Data Browser: tabella IFLO\s+\d+\s+hit",
-                'EN': "",
-                'PT': "",
-                'ES': ""
+                'EN': r"Data Browser: Table IFLO Select Entries\s+\d+",
+                'PT': r"Data Browser: Tabela IFLO\s+\d+\s+acertos",
+                'ES': r"Data Browser: Tabla IFLO\s+\d+\s+aciertos"
             }                  
             # Aggiungi altri messaggi SAP qui...
         }    
@@ -222,8 +222,8 @@ class SAPDataExtractor:
                 # Creo il df ed inserisco il valore della FL
                 df_fl = pd.DataFrame({"Sede tecnica": [fl]})
                 # Leggo il valore della definizione sede tecnica e lo inserisco nel df
-                definizione = self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text
-                df_fl["Definizione della sede tecnica"] = definizione
+                # definizione = self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text
+                # df_fl["Definizione della sede tecnica"] = definizione
                 return True, df_fl
             # Più di un valore trovato
             elif self.check_sap_window('W_IH06_multiple_data_result'):

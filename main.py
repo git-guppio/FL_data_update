@@ -334,10 +334,18 @@ class MainWindow(QMainWindow):
                                 
                                 ### Estraggo tutte le FL che corrispondono all FL con * contenuta come chiave
                                 success, df = extractor.extract_FL_list(key)
+                                # Modifico l'intestazione delle colonne del df mettendola in lingua IT
+                                try:
+                                    intestazione_df_IH06 = ['Sede tecnica']
+                                    df_renamed = self.rename_columns_safely(df, intestazione_df_IH06)
+                                    print(df_renamed.columns.tolist())
+                                except ValueError as e:
+                                    print(f"Errore: {e}")
+                                    return
                                 
                                 if success:
                                     # Aggiungo i dati ottenuti al dizionario con chiave 'Mask_star'                                    
-                                    self.fl_dictionary[key] = df
+                                    self.fl_dictionary[key] = df_renamed
                                     self.log_message(f"Estrazione FL {key} riuscita!", 'success')
                                 else:
                                     self.log_message(f"Errore durante l'estrazione della FL: {key}", 'error')
@@ -361,12 +369,22 @@ class MainWindow(QMainWindow):
 
                         self.log_message("Estrazioni completata con successo", 'success')
                         self.log_message(f"Totale FL estratte = {len(self.fl_df_tot)}", 'success')
+
+                        # Modifico l'intestazione delle colonne del df mettendola in lingua IT
+                        try:
+                            intestazione_df_IFLO = ['Sede tecnica', 'Definizione della sede tecnica', 'L', 'L_1', 'Tipologia', 'Componente', 'Sezione', 'Tipo ogg.', 'Prof.cat.']
+                            df_renamed = self.rename_columns_safely(self.fl_df_tot, intestazione_df_IFLO)
+                            print(df_renamed.columns.tolist())
+                        except ValueError as e:
+                            print(f"Errore: {e}")
+                            return
+
                         # Creo il nome del file per salvare i dati
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         file_Excel = f"FL_estratte_" + timestamp + ".xlsx"
                         self.log_message(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
                         # Salvo il DataFrame in un file Excel
-                        if self.save_excel_file_advanced(self.fl_df_tot, file_Excel,
+                        if self.save_excel_file_advanced(df_renamed, file_Excel,
                                                         sheet_name='Dati_estratti',
                                                         index=False,
                                                         overwrite=True):
@@ -376,7 +394,7 @@ class MainWindow(QMainWindow):
 
                                 
                         ### Verifico che il df  contenga fl con lingua attualmente in uso nella sessione di SAP
-                        result, df_filtrato = self.Check_Lang(self.fl_df_tot, self.infoLanguage)
+                        result, df_filtrato = self.Check_Lang(df_renamed, self.infoLanguage)
                         if result:
                                 
                                 ### Aggiorno i valori delle fl contenute nel df
@@ -386,7 +404,7 @@ class MainWindow(QMainWindow):
                                     # creo una statistica degli aggiornamenti eseguiti
                                     result_stat = self.analyze_result(df_result)   
 
-                                    df_result = self.check_modifications_detailed(df_result)       
+                                    df_result = self.check_modifications_detailed(df_result)     
 
                                     # Creo il nome del file per salvare i dati
                                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -419,6 +437,67 @@ class MainWindow(QMainWindow):
         # ---------------------------------------------------- 
         self.extract_button.setEnabled(True)
 
+
+
+    # ----------------------------------------------------
+    # Modifica l' intestazione di un df
+    # ---------------------------------------------------- 
+
+    def rename_columns_safely(self, df, new_column_names, inplace=False):
+        """
+        Rinomina le colonne di un DataFrame con controlli di sicurezza.
+        
+        Args:
+            df (pd.DataFrame): DataFrame da modificare
+            new_column_names (list): Lista dei nuovi nomi delle colonne
+            inplace (bool): Se True modifica il DataFrame originale, altrimenti crea una copia
+        
+        Returns:
+            pd.DataFrame: DataFrame con colonne rinominate
+            
+        Raises:
+            ValueError: Se il numero di colonne non corrisponde
+            TypeError: Se new_column_names non è una lista
+        """
+        
+        # Verifica che new_column_names sia una lista
+        if not isinstance(new_column_names, (list, tuple)):
+            raise TypeError(f"new_column_names deve essere una lista o tupla, ricevuto: {type(new_column_names)}")
+        
+        # Verifica che il numero di colonne corrisponda
+        if len(df.columns) != len(new_column_names):
+            raise ValueError(
+                f"Numero di colonne non corrisponde!\n"
+                f"  DataFrame ha {len(df.columns)} colonne: {list(df.columns)}\n"
+                f"  Forniti {len(new_column_names)} nomi: {new_column_names}"
+            )
+        
+        # Verifica duplicati nei nuovi nomi
+        if len(new_column_names) != len(set(new_column_names)):
+            duplicates = [name for name in new_column_names if new_column_names.count(name) > 1]
+            raise ValueError(f"Nomi duplicati trovati nei nuovi nomi: {set(duplicates)}")
+        
+        # Verifica che tutti i nomi siano stringhe non vuote
+        invalid_names = [name for name in new_column_names if not isinstance(name, str) or not name.strip()]
+        if invalid_names:
+            raise ValueError(f"Nomi di colonne non validi (devono essere stringhe non vuote): {invalid_names}")
+        
+        # Crea copia se richiesto
+        working_df = df if inplace else df.copy()
+        
+        # Report delle modifiche
+        print("📋 RINOMINAZIONE COLONNE:")
+        print("  Vecchio nome → Nuovo nome")
+        print("  " + "-" * 30)
+        for old, new in zip(df.columns, new_column_names):
+            print(f"  {old} → {new}")
+        
+        # Applica i nuovi nomi
+        working_df.columns = new_column_names
+        
+        print(f"✅ Rinominazione completata per {len(new_column_names)} colonne")
+        
+        return working_df
 
     #-----------------------------------------------------------------------------
     # Genera una statistica dei risultati
