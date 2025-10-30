@@ -223,6 +223,9 @@ class MainWindow(QMainWindow):
         self.extract_button.setEnabled(True)
         self.upload_button.setEnabled(False)
         self.log_message("Finestre pulite")
+        # Elimino i dati memorizzati da estrazioni precedenti
+        self.fl_dictionary = {}
+        self.fl_df_tot = pd.DataFrame()
 
     def validate_clipboard_data(self) -> Tuple[bool, dict[str, pd.DataFrame] | None]:
         """Valida i dati nella finestra di testo sinistra (clipboard_area)"""
@@ -242,7 +245,7 @@ class MainWindow(QMainWindow):
             if not line.strip():
                 continue
             # Data contiene le righe presenti nella clipboard_area (riquadro a sx)
-            # Le roghe possono contenere codici di sedi tecniche complete oppure dei codici contenenti il carattere '*'
+            # Le righe possono contenere codici di sedi tecniche complete oppure dei codici contenenti il carattere '*'
             # Nel primo caso verifico che la riga rispetti la maschera 'Mask_gen' e inserisco le riga all'interno del df fl_dictionary['Mask_gen']
             # Nel secondo caso verifico che la riga rispetti la maschera 'Mask_star' e creo una nuova chiave nel dizionario che andrà a contenere le FL estratte con transazione H06
             try:
@@ -255,7 +258,7 @@ class MainWindow(QMainWindow):
                     fl_dictionary['Mask_gen'] = pd.concat([fl_dictionary['Mask_gen'], new_row], ignore_index=True)
                 elif ('*' in line) and (re.match(patterns['Mask_star'], line)):
                     # aggiungi una nuova chiave al df
-                    fl_dictionary[line] = pd.DataFrame
+                    fl_dictionary[line] = pd.DataFrame()
                 else:
                     error_msg = (f"Errore riga {i}: la FL: {line} non rispetta la maschera.\n")
                     fl_errors += error_msg               
@@ -289,7 +292,11 @@ class MainWindow(QMainWindow):
         # Validazione dati con maschere
         # ----------------------------------------------------        
         if(True):
-            # Prima verifica i dati nella finestra di testo sinistra (clipboard_area)
+            # Prima verifica i dati nella finestra di testo sinistra (clipboard_area) che può contenere una lista di FL
+            # oppure FL seguite dal carattere *
+            # Crea un dizionario che ha come chiavi:
+            # Mask_gen - contiene i valori delle lista in cui non compare il carattere *
+            # FL con * - contiene un df vuoto che verrà popolato con le FL estratte con IH06
             result, self.fl_dictionary = self.validate_clipboard_data()
             if not result:
                 self.log_message("Dati inseriti non validi", 'error')
@@ -325,15 +332,19 @@ class MainWindow(QMainWindow):
                         if not self.fl_dictionary:
                             self.log_message("Nessuna FL da estrarre", 'warning')   
                             return
-                        # Itero attraverso le chiavi del dizionario per ottenere tutte le liste di FL necessarie
+                        # Itero attraverso le chiavi del dizionario per ottenere tutte le liste di FL necessarie escludendo quelle che non sono in stato CRT
                         for key in self.fl_dictionary.keys():
-                            # Se la chiave è diversa da 'Mask_gen' allora si tratta di Fl che contengono il carattere '*'
+                            
+                            ### Estraggo tutte le FL che corrispondono all FL con * contenuta come chiave Utilizzo IH06
+                            # Rimuovo le FL che non sono in stato CRT (in base alla lingua della sessione SAP)
                             if key != 'Mask_gen':
-                            # Esamino i valori di FL contenuti nel dizionario
-                                self.log_message("Inizio estrazione dati FL contenenti *", 'loading')
-                                
-                                ### Estraggo tutte le FL che corrispondono all FL con * contenuta come chiave
+                                self.log_message("Estrazione dati FL contenenti *", 'loading')
                                 success, df = extractor.extract_FL_list(key)
+                            else:
+                                self.log_message("Estrazione lista FL", 'loading')
+                                stringa = '\r\n'.join(self.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip())
+                                success, df = extractor.extract_FL_list(stringa)
+                            if success:                                
                                 # Modifico l'intestazione delle colonne del df mettendola in lingua IT
                                 try:
                                     intestazione_df_IH06 = ['Sede tecnica']
@@ -342,15 +353,13 @@ class MainWindow(QMainWindow):
                                 except ValueError as e:
                                     print(f"Errore: {e}")
                                     return
-                                
-                                if success:
-                                    # Aggiungo i dati ottenuti al dizionario con chiave 'Mask_star'                                    
-                                    self.fl_dictionary[key] = df_renamed
-                                    self.log_message(f"Estrazione FL {key} riuscita!", 'success')
-                                else:
-                                    self.log_message(f"Errore durante l'estrazione della FL: {key}", 'error')
-                                    return False
-                        # ottenute le liste di FL, procedo con l'estrazione dei dati
+                                # Aggiungo i dati ottenuti al dizionario con chiave 'Mask_star'                                    
+                                self.fl_dictionary[key] = df_renamed
+                                self.log_message(f"Estrazione FL {key} riuscita!", 'success')
+                            else:
+                                self.log_message(f"Errore durante l'estrazione della FL: {key}", 'error')
+                                return False    
+                        # ottenute le liste di FL, procedo con l'estrazione dei dati con la transazione IFLO
                         for key in self.fl_dictionary.keys():
                             self.log_message("Inizio estrazione dati lista FL", 'loading') 
                             

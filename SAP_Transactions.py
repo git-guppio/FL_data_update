@@ -83,7 +83,16 @@ class SAPDataExtractor:
                 'ES': r"Data Browser: Tabla IFLO\s+\d+\s+aciertos"
             }                  
             # Aggiungi altri messaggi SAP qui...
-        }    
+        }
+        # Configurazione parametri multilignua
+        self.SAP_PARAMETERS = {
+            'P_IH06_Status_Created': {
+                'IT': "CRT",
+                'EN': "CRTE",
+                'PT': "CRI.",
+                'ES': "CREA"
+            }
+        }         
 
     def check_sap_bar(self, message_bar: str, use_regex: bool = False) -> bool:
         """
@@ -207,8 +216,41 @@ class SAPDataExtractor:
             # Utilizza transazione IH06
             self.session.findById("wnd[0]/tbar[0]/okcd").text = "/nIH06"
             self.session.findById("wnd[0]").sendVKey(0)
-            self.session.findById("wnd[0]/usr/ctxtSTRNO-LOW").text = fl
+            # Verifico se la stringa contiene il carattere '*'.
+            # - Se lo contiene allora inserisco il valore nel campo delle FL con '*'
+            # - Se non lo contiene allora inserisco la stringa nella clipboard per caricare tutti i valori nel campo FL
+            if '*' in fl:
+                self.session.findById("wnd[0]/usr/ctxtSTRNO-LOW").text = fl
+            else:
+                if self.copia_in_clipboard(fl):
+                    print("IH06 - Lista Fl copiata nella clipbard con successo.")
+                else:
+                    raise ValueError("Errore durante la copia della lista FL nella clipboard")
+                self.session.findById("wnd[0]/usr/btn%_STRNO_%_APP_%-VALU_PUSH").press()
+                self.session.findById("wnd[1]/tbar[0]/btn[24]").press()
+                self.session.findById("wnd[1]/tbar[0]/btn[8]").press()
+                time.sleep(0.25)
             self.session.findById("wnd[0]/usr/ctxtVARIANT").text = "CHECK_FL_S"
+            # Imposto filtro per escludere le FL con stato diverso da "Creato"
+            # Inserisci filtro escludi
+            self.session.findById("wnd[0]/usr/ctxtSTAE1-LOW").setFocus()
+            self.session.findById("wnd[0]/usr/ctxtSTAE1-LOW").caretPosition = 0
+            self.session.findById("wnd[0]").sendVKey(2)
+            time.sleep(0.25)
+            # Selezione opzioni
+            self.session.findById("wnd[1]/usr/cntlOPTION_CONTAINER/shellcont/shell").currentCellRow = 5
+            self.session.findById("wnd[1]/usr/cntlOPTION_CONTAINER/shellcont/shell").selectedRows = "5"
+            self.session.findById("wnd[1]/usr/cntlOPTION_CONTAINER/shellcont/shell").doubleClickCurrentCell()
+            time.sleep(0.25)
+            # Inserisci stato
+            param_value = self.SAP_PARAMETERS['P_IH06_Status_Created'].get(
+                self.session.info.language, 
+                "CRT"  # valore di default se lingua non trovata
+            )
+            self.session.findById("wnd[0]/usr/ctxtSTAE1-LOW").text = param_value
+            self.session.findById("wnd[0]/usr/ctxtSTAE1-LOW").caretPosition = 3
+            self.session.findById("wnd[0]").sendVKey(0)
+
             self.session.findById("wnd[0]/tbar[1]/btn[8]").press()
             # attendo il caricamento dei dati
             time.sleep(0.5)
@@ -216,15 +258,17 @@ class SAPDataExtractor:
             # Nessun dato travato
             if self.check_sap_bar('B_IH06_no_data_result'):
                 raise ValueError(f"Nessun dato per la FL: {fl}")
+            # ---------------------------------------------------------
             #  Un solo valore trovato
             elif self.check_sap_window('W_IH06_single_data_result'):
                 self.log_message(f"Numero di elementi per la FL {fl} = 1", "info")
                 # Creo il df ed inserisco il valore della FL
-                df_fl = pd.DataFrame({"Sede tecnica": [fl]})
+                df_fl = pd.DataFrame({"Sede tecnica": [self.session.findById("wnd[0]/usr/txtIFLO-TPLNR").text]})
                 # Leggo il valore della definizione sede tecnica e lo inserisco nel df
                 # definizione = self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text
                 # df_fl["Definizione della sede tecnica"] = definizione
                 return True, df_fl
+            # ---------------------------------------------------------
             # Più di un valore trovato
             elif self.check_sap_window('W_IH06_multiple_data_result'):
                 num_elementi = self.session.findById("wnd[0]/usr/cntlGRID1/shellcont/shell").RowCount
@@ -417,16 +461,16 @@ class SAPDataExtractor:
                 ### Modifico i dati per aggiornare i valori di ogni singola FL
                 self.session.findById("wnd[0]/tbar[0]/okcd").text = "/nIL02"
                 self.session.findById("wnd[0]").sendVKey(0)
-                time.sleep(0.5)
+                time.sleep(0.25)
                 # Inserisco la FL da modificare
                 self.session.findById("wnd[0]/usr/ctxtIFLO-TPLNR").text = fl
                 # Avvio transazione
                 self.session.findById("wnd[0]").sendVKey(0)
-                time.sleep(0.5)               
+                time.sleep(0.25)               
                 # inserisco descrizione
                 self.session.findById("wnd[0]/usr/txtIFLO-PLTXT").text = descrizione
                 self.session.findById("wnd[0]").sendVKey(0)
-                time.sleep(0.5)
+                time.sleep(0.25)
                 # Verifico che non venga generato un errore leggendo l'icona
                 try:
                     iconType = self.session.findById("wnd[0]/sbar").MessageType
@@ -576,17 +620,39 @@ class SAPDataExtractor:
             # Crea il DataFrame con i nuovi header
             df = pd.DataFrame(data_rows[1:], columns=unique_headers)
 
-            # Rimuove le colonne completamente vuote o con tenenti valori nulli
+            # Rimuove le colonne con intestazione vuota o che inizia con _
             cols_to_keep = []
             for col in df.columns:
-                col_clean = df[col].astype(str).str.strip()
-                if not col_clean.isin(['', 'nan', 'None', 'NaN']).all():
-                    cols_to_keep.append(col)
-            if not cols_to_keep:
-                raise ValueError("Nessuna colonna contiene dati validi")
+                # Converte il nome della colonna in stringa e rimuove spazi
+                col_name = str(col).strip()
                 
+                # Mantiene la colonna se:
+                # - NON è vuota
+                # - NON inizia con underscore
+                if col_name != '' and not col_name.startswith('_'):
+                    cols_to_keep.append(col)
+
+            if not cols_to_keep:
+                raise ValueError("Nessuna colonna ha un'intestazione valida")
+
+            # Mantiene solo le colonne valide
             df = df[cols_to_keep]
+
+            # Stampa il numero di colonne mantenute
             print(f"✅ DataFrame filtrato: {len(cols_to_keep)} colonne mantenute")
+
+            # # Rimuove le colonne completamente vuote o con soli valori nulli
+            # cols_to_keep = []
+            # for col in df.columns:
+            #     col_clean = df[col].astype(str).str.strip()
+            #     if not col_clean.isin(['', 'nan', 'None', 'NaN']).all():
+            #         cols_to_keep.append(col)
+            # if not cols_to_keep:
+            #     raise ValueError("Nessuna colonna contiene dati validi")
+                
+            # df = df[cols_to_keep]
+            # print(f"✅ DataFrame filtrato: {len(cols_to_keep)} colonne mantenute")
+
             # Verifico se il df contiene dei dati
             if df.empty:
                 return False, None
@@ -625,6 +691,26 @@ class SAPDataExtractor:
                 unique_headers.append(header)
         
         return unique_headers
+    
+    def copia_in_clipboard(self, testo: str) -> bool:
+        """
+        Copia una stringa nella clipboard di Windows.
+        
+        Args:
+            testo: stringa da copiare
+            
+        Returns:
+            bool: True se successo, False altrimenti
+        """
+        try:
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(testo)
+            win32clipboard.CloseClipboard()
+            return True
+        except Exception as e:
+            print(f"Errore durante la copia nella clipboard: {e}")
+            return False    
 
     def wait_for_clipboard_data(self, timeout: int = 30) -> bool:
         """
