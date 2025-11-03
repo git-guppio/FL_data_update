@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
                                 success, df = extractor.extract_FL_list(key)
                             else:
                                 self.log_message("Estrazione lista FL", 'loading')
-                                stringa = '\r\n'.join(self.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip())
+                                stringa = '\r\n'.join(self.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip()) # extract_FL_list deve ricevere come argomento una stringa 
                                 success, df = extractor.extract_FL_list(stringa)
                             if success:                                
                                 # Modifico l'intestazione delle colonne del df mettendola in lingua IT
@@ -353,7 +353,7 @@ class MainWindow(QMainWindow):
                                 except ValueError as e:
                                     print(f"Errore: {e}")
                                     return
-                                # Aggiungo i dati ottenuti al dizionario con chiave 'Mask_star'                                    
+                                # Aggiungo i dati ottenuti al dizionario                               
                                 self.fl_dictionary[key] = df_renamed
                                 self.log_message(f"Estrazione FL {key} riuscita!", 'success')
                             else:
@@ -368,6 +368,7 @@ class MainWindow(QMainWindow):
                             
                             if success:
                                 self.log_message(f"Estratte {len(df)} FL per {key}", 'success')
+                                # Concateno i dati estratti al df totale
                                 if self.fl_df_tot.empty:
                                     self.fl_df_tot = df.copy()
                                 else:

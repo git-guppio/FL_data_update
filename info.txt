@@ -1,4 +1,6 @@
-* Scopo del programma
+# ============================================================================
+#   Scopo del programma
+# ============================================================================
 
 # Se sono modificati i valori nella tabella CTR_ASS la modifiche non vengono atuomaticamente lette (non si propagnano) nelle tabelle
 che riportano la descrizione delle FL (ad esempio la tab IFLO)
@@ -10,12 +12,15 @@ e successivamente salva i dati.
 
 Al termine della modifica i dati vengono salvati su un file excel che riporta i dati prima e dopo della modifica
 
-Note sullo stato Creato
-Lingua | Stato
-IT     | CRT
-ES     | CREA
-PT     | CRI.
-EN     | CRTE
+#Note sullo stato Creato
+
+    Il propgramma considera solo le FL che sono in stato creato (esclude quelle in FCAN e OGIN?), la selezione dello stato viene fatta in base alla lingua di login
+
+    Lingua | Stato
+    IT     | CRT
+    ES     | CREA
+    PT     | CRI.
+    EN     | CRTE
 
 
 

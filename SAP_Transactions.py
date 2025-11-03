@@ -242,7 +242,7 @@ class SAPDataExtractor:
             self.session.findById("wnd[1]/usr/cntlOPTION_CONTAINER/shellcont/shell").selectedRows = "5"
             self.session.findById("wnd[1]/usr/cntlOPTION_CONTAINER/shellcont/shell").doubleClickCurrentCell()
             time.sleep(0.25)
-            # Inserisci stato
+            # Inserisci stato in base alla lingua
             param_value = self.SAP_PARAMETERS['P_IH06_Status_Created'].get(
                 self.session.info.language, 
                 "CRT"  # valore di default se lingua non trovata
@@ -272,7 +272,7 @@ class SAPDataExtractor:
             # Più di un valore trovato
             elif self.check_sap_window('W_IH06_multiple_data_result'):
                 num_elementi = self.session.findById("wnd[0]/usr/cntlGRID1/shellcont/shell").RowCount
-                self.log_message(f"Numero di elementi per la FL {fl} = {num_elementi}", "info")
+                self.log_message(f"Numero di elementi per la FL {fl if '*' in fl else 'lista'} = {num_elementi}", "info")
                 self.session.findById("wnd[0]/mbar/menu[0]/menu[10]/menu[2]").select()
                 time.sleep(0.5)  
                 self.session.findById("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[4,0]").select()
