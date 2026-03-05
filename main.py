@@ -6,11 +6,10 @@ import pandas as pd
 from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout,
                            QHBoxLayout, QWidget, QTextEdit, QListWidget, QLabel, QMessageBox,
-                           QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction)
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QCursor
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QTextCursor
+                           QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction,
+                           QProgressBar)
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtGui import QCursor, QFont, QTextCursor
 
 from sap.session_manager import SAPSessionManager
 from sap.operations import SAPOperations
@@ -37,6 +36,168 @@ from config.settings import AppSettings
 
 # # Logger specifico per questo modulo
 # logger = logging.getLogger("main").setLevel(logging.DEBUG)
+
+
+# =============================================================================
+# Worker thread: esegue tutte le operazioni SAP in background.
+# Il thread GUI resta libero → QTimer a 100ms processa i log in real-time.
+# Comunicazione GUI ↔ Worker solo tramite segnali Qt (thread-safe).
+# =============================================================================
+class SAPWorker(QThread):
+    # (FL completate, FL totali)
+    progress_updated = pyqtSignal(int, int)
+    # True = tutto OK, False = terminato con errori/parziale
+    operation_done   = pyqtSignal(bool)
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.mw = main_window
+
+    def run(self):
+        """Logica SAP spostata fuori dal thread GUI."""
+        mw = self.mw
+        df_result = None
+        success   = False
+
+        try:
+            if not mw.session_manager:
+                mw.initialize_sap_components()
+
+            with mw.session_manager.get_session() as session:
+                if not session:
+                    mw.log("Connessione SAP NON attiva", 'error')
+                    self.operation_done.emit(False)
+                    return
+
+                try:
+                    mw.infoUser       = session.info.user
+                    mw.infoSystemName = session.info.systemName
+                    mw.infoClient     = session.info.client
+                    mw.infoLanguage   = session.info.language
+                    mw.log(f"ID utente:    {mw.infoUser}", 'info')
+                    mw.log(f"System Name: {mw.infoSystemName}", 'info')
+                    mw.log(f"Mandante:    {mw.infoClient}", 'info')
+                    mw.log(f"Lingua:      {mw.infoLanguage}", 'info')
+                except Exception as e:
+                    mw.log(f"Errore lettura info SAP: {e}", 'error')
+                    self.operation_done.emit(False)
+                    return
+
+                mw.log("Connessione SAP attiva", 'success')
+                extractor = SAPDataExtractor(session, mw)
+
+                if not mw.fl_dictionary:
+                    mw.log("Nessuna FL da estrarre", 'warning')
+                    self.operation_done.emit(False)
+                    return
+
+                # --- Fase 1: estrazione liste FL (IH06) ---
+                for key in mw.fl_dictionary.keys():
+                    if key != 'Mask_gen':
+                        mw.log("Estrazione dati FL contenenti *", 'loading')
+                        ok, df = extractor.extract_FL_list(key)
+                    else:
+                        mw.log("Estrazione lista FL", 'loading')
+                        stringa = '\r\n'.join(
+                            mw.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip()
+                        )
+                        ok, df = extractor.extract_FL_list(stringa)
+
+                    if ok:
+                        try:
+                            df_renamed = mw.rename_columns_safely(df, ['Sede tecnica'])
+                        except ValueError as e:
+                            mw.log(f"Errore rinomina colonne: {e}", 'error')
+                            self.operation_done.emit(False)
+                            return
+                        mw.fl_dictionary[key] = df_renamed
+                        mw.log(f"Estrazione FL {key} riuscita!", 'success')
+                    else:
+                        mw.log(f"Errore durante l'estrazione della FL: {key}", 'error')
+                        self.operation_done.emit(False)
+                        return
+
+                # --- Fase 2: estrazione dettagli FL (SE16/IFLO) ---
+                fl_df_tot = pd.DataFrame()
+                for key in mw.fl_dictionary.keys():
+                    mw.log("Inizio estrazione dati lista FL", 'loading')
+                    ok, df = extractor.extract_FL_IFLO(mw.fl_dictionary[key])
+                    if ok:
+                        mw.log(f"Estratte {len(df)} FL per {key}", 'success')
+                        fl_df_tot = df.copy() if fl_df_tot.empty else pd.concat(
+                            [fl_df_tot, df], ignore_index=True
+                        )
+                    else:
+                        mw.log("Errore durante l'estrazione delle FL", 'error')
+                        self.operation_done.emit(False)
+                        return
+
+                mw.log("Estrazione completata con successo", 'success')
+                mw.log(f"Totale FL estratte = {len(fl_df_tot)}", 'success')
+                mw.fl_df_tot = fl_df_tot
+
+                try:
+                    intestazione = ['Sede tecnica', 'Definizione della sede tecnica',
+                                    'L', 'L_1', 'Tipologia', 'Componente',
+                                    'Sezione', 'Tipo ogg.', 'Prof.cat.']
+                    df_renamed = mw.rename_columns_safely(fl_df_tot, intestazione)
+                except ValueError as e:
+                    mw.log(f"Errore rinomina colonne: {e}", 'error')
+                    self.operation_done.emit(False)
+                    return
+
+                timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+                file_Excel = f"FL_estratte_{timestamp}.xlsx"
+                mw.log(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
+                if mw.save_excel_file_advanced(df_renamed, file_Excel,
+                                               sheet_name='Dati_estratti',
+                                               index=False, overwrite=True):
+                    mw.log("File Excel salvato con successo", 'success')
+                else:
+                    mw.log("Errore durante il salvataggio del file Excel", 'error')
+
+                # --- Fase 3: aggiornamento FL (IL02) ---
+                result, df_filtrato = mw.Check_Lang(df_renamed, mw.infoLanguage)
+                if not result:
+                    mw.log("Errore durante l'elaborazione del df", 'error')
+                    self.operation_done.emit(False)
+                    return
+
+                total = len(df_filtrato)
+                self.progress_updated.emit(0, total)
+
+                ok, df_result = extractor.update_FL_parallel(
+                    df_filtrato,
+                    mw.session_manager,
+                    n_workers=4,
+                    progress_callback=lambda c, t: self.progress_updated.emit(c, t)
+                )
+
+                if ok:
+                    mw.analyze_result(df_result)
+                    df_result = mw.check_modifications_detailed(df_result)
+                    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    file_Excel = f"FL_aggiornate_{timestamp}.xlsx"
+                    mw.log(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
+                    if mw.save_excel_file_advanced(df_result, file_Excel,
+                                                   sheet_name='Dati_modificati',
+                                                   index=False, overwrite=True):
+                        mw.log("File Excel salvato con successo", 'success')
+                    else:
+                        mw.log("Errore durante il salvataggio del file Excel", 'error')
+                    success = True
+                else:
+                    mw.log("Aggiornamento interrotto — salvataggio dati parziali", 'warning')
+                    mw._save_partial_results(df_result)
+
+                mw.log("Elaborazione terminata", 'success')
+
+        except Exception as e:
+            mw.log(f"Errore SAP: {e}", 'error')
+            mw._save_partial_results(df_result)
+
+        self.operation_done.emit(success)
+
 
 class MainWindow(QMainWindow, BaseComponent):
     def __init__(self):
@@ -65,16 +226,22 @@ class MainWindow(QMainWindow, BaseComponent):
 
         # Inizializza componenti per il MultiThreaD
         self.session_manager = None
-        self.thread_manager = None # Inizializzato in initialize_sap_components()
-        self.sap_operations = None      
+        self.thread_manager  = None
+        self.sap_operations  = None
+        self.sap_worker      = None
+
+        # Variabili per il timer elapsed
+        self.start_time    = None
+        self.elapsed_timer = QTimer()
+        self.elapsed_timer.timeout.connect(self._update_elapsed)
 
         # Setup GUI
-        self.init_ui()          
+        self.init_ui()
 
-        # Setup timer per processare log dalla coda
+        # Setup timer per processare log dalla coda (100ms → real-time log)
         self.log_timer = QTimer()
         self.log_timer.timeout.connect(self.process_log_queue)
-        self.log_timer.start(100)  # Controlla ogni 100ms
+        self.log_timer.start(100)
 
 
     def init_ui(self):
@@ -155,6 +322,57 @@ class MainWindow(QMainWindow, BaseComponent):
         
         # Aggiungi il layout dei bottoni al layout principale
         main_layout.addLayout(button_layout)
+
+        # ----------------------------------------------------
+        # Status bar: stato | barra progresso | elapsed time
+        # ----------------------------------------------------
+        sb = self.statusBar()
+
+        self.status_label = QLabel("Pronto")
+        sb.addWidget(self.status_label, 1)          # stretch=1: occupa lo spazio rimasto
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedWidth(220)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)
+        sb.addPermanentWidget(self.progress_bar)
+
+        self.elapsed_label = QLabel("00:00:00")
+        self.elapsed_label.setFixedWidth(65)
+        sb.addPermanentWidget(self.elapsed_label)
+
+    # ----------------------------------------------------
+    # Elapsed time
+    # ----------------------------------------------------
+    def _update_elapsed(self):
+        if self.start_time:
+            secs = int((datetime.now() - self.start_time).total_seconds())
+            h, r = divmod(secs, 3600)
+            m, s = divmod(r, 60)
+            self.elapsed_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
+
+    # ----------------------------------------------------
+    # Slot: aggiornamento progresso dal worker
+    # ----------------------------------------------------
+    def _on_progress_updated(self, completed: int, total: int):
+        if total > 0:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(completed)
+            self.status_label.setText(f"Aggiornamento FL: {completed} / {total}")
+
+    # ----------------------------------------------------
+    # Slot: worker terminato
+    # ----------------------------------------------------
+    def _on_worker_finished(self, success: bool):
+        self.elapsed_timer.stop()
+        self.progress_bar.setVisible(False)
+        self.extract_button.setEnabled(True)
+        if success:
+            self.status_label.setText("Elaborazione completata")
+        else:
+            self.status_label.setText("Terminato con errori — verificare il log")
 
     def process_log_queue(self):
         """
@@ -365,177 +583,23 @@ class MainWindow(QMainWindow, BaseComponent):
     # Routine associata al tasto <Estrai Dati>
     # ----------------------------------------------------
     def update_data(self):
-
-        # Disabilito il tasto
-        self.extract_button.setEnabled(False)
-
-        # Pre-inizializzato a None: se un'eccezione avviene prima dell'assegnazione
-        # il gestore di errori può comunque verificare se ci sono dati parziali da salvare.
-        df_result = None
-
-        # ----------------------------------------------------
-        # Validazione dati con maschere
-        # ----------------------------------------------------
-        if(True):
-            # Prima verifica i dati nella finestra di testo sinistra (clipboard_area) che può contenere una lista di FL
-            # oppure FL seguite dal carattere *
-            # Crea un dizionario che ha come chiavi:
-            # Mask_gen - contiene i valori delle lista in cui non compare il carattere *
-            # FL con * - contiene un df vuoto che verrà popolato con le FL estratte con IH06
-            result, self.fl_dictionary = self.validate_clipboard_data()
-            if not result:
-                self.log("Dati inseriti non validi", 'error')
-                return
-            # # Creo un dizionario che ha come chiavi i valori della lista data_string e come valori dei DataFrame vuoti
-            # self.fl_dictionary = {item: pd.DataFrame() for item in data_string}
-
-
-        # altrimenti estraggo i dati da SAP
-        self.log("Avvio connessione SAP...")
-        try:
-            # Inizializza SOLO se non è già stato fatto
-            if not self.session_manager:
-                self.initialize_sap_components()
-
-
-            with self.session_manager.get_session() as session:
-                if session:
-                    if session:
-                        try:
-                            self.infoUser = session.info.user
-                            self.infoSystemName = session.info.systemName
-                            self.infoClient = session.info.client
-                            self.infoLanguage = session.info.language
-
-                            self.log(f"ID utente:  {self.infoUser}", 'info')
-                            self.log(f"System Name: {self.infoSystemName}", 'info')
-                            self.log(f"Mandante: {self.infoClient}", 'info')
-                            self.log(f"Lingua:  {self.infoLanguage}", 'info')
-                        except Exception as e:
-                            self.log(f"Errore lettura info SAP: {str(e)}", 'error')
-                            return                        
-                        self.log("Connessione SAP attiva", 'success')
-                        extractor = SAPDataExtractor(session, self)
-                        # Eseguo l'estrazione dei dati per ogni FL iterando per le chiavi del dizionario
-                        if not self.fl_dictionary:
-                            self.log("Nessuna FL da estrarre", 'warning')   
-                            return
-                        # Itero attraverso le chiavi del dizionario per ottenere tutte le liste di FL necessarie escludendo quelle che non sono in stato CRT
-                        for key in self.fl_dictionary.keys():
-                            
-                            ### Estraggo tutte le FL che corrispondono all FL con * contenuta come chiave Utilizzo IH06
-                            # Rimuovo le FL che non sono in stato CRT (in base alla lingua della sessione SAP)
-                            if key != 'Mask_gen':
-                                self.log("Estrazione dati FL contenenti *", 'loading')
-                                success, df = extractor.extract_FL_list(key)
-                            else:
-                                self.log("Estrazione lista FL", 'loading')
-                                stringa = '\r\n'.join(self.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip()) # extract_FL_list deve ricevere come argomento una stringa
-                                success, df = extractor.extract_FL_list(stringa)
-                            if success:                                
-                                # Modifico l'intestazione delle colonne del df mettendola in lingua IT
-                                try:
-                                    intestazione_df_IH06 = ['Sede tecnica']
-                                    df_renamed = self.rename_columns_safely(df, intestazione_df_IH06)
-                                    print(df_renamed.columns.tolist())
-                                except ValueError as e:
-                                    print(f"Errore: {e}")
-                                    return
-                                # Aggiungo i dati ottenuti al dizionario                               
-                                self.fl_dictionary[key] = df_renamed
-                                self.log(f"Estrazione FL {key} riuscita!", 'success')
-                            else:
-                                self.log(f"Errore durante l'estrazione della FL: {key}", 'error')
-                                return False    
-                        # ottenute le liste di FL, procedo con l'estrazione dei dati con la transazione IFLO
-                        for key in self.fl_dictionary.keys():
-                            self.log("Inizio estrazione dati lista FL", 'loading') 
-                            
-                            ### Estraggo i dati delle FL per ciascuna lista relativa ad una chiave
-                            success, df = extractor.extract_FL_IFLO(self.fl_dictionary[key])
-                            
-                            if success:
-                                self.log(f"Estratte {len(df)} FL per {key}", 'success')
-                                # Concateno i dati estratti al df totale
-                                if self.fl_df_tot.empty:
-                                    self.fl_df_tot = df.copy()
-                                else:
-                                    self.fl_df_tot = pd.concat([self.fl_df_tot, df], ignore_index=True)
-                            else:
-                                self.log(f"Errore durante l'estrazione delle FL", 'error')
-                                return
-
-                        self.log("Estrazioni completata con successo", 'success')
-                        self.log(f"Totale FL estratte = {len(self.fl_df_tot)}", 'success')
-
-                        # Modifico l'intestazione delle colonne del df mettendola in lingua IT
-                        try:
-                            intestazione_df_IFLO = ['Sede tecnica', 'Definizione della sede tecnica', 'L', 'L_1', 'Tipologia', 'Componente', 'Sezione', 'Tipo ogg.', 'Prof.cat.']
-                            df_renamed = self.rename_columns_safely(self.fl_df_tot, intestazione_df_IFLO)
-                            print(df_renamed.columns.tolist())
-                        except ValueError as e:
-                            print(f"Errore: {e}")
-                            return
-
-                        # Creo il nome del file per salvare i dati
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        file_Excel = f"FL_estratte_" + timestamp + ".xlsx"
-                        self.log(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
-                        # Salvo il DataFrame in un file Excel
-                        if self.save_excel_file_advanced(df_renamed, file_Excel,
-                                                        sheet_name='Dati_estratti',
-                                                        index=False,
-                                                        overwrite=True):
-                            self.log("File Excel salvato con successo", 'success')
-                        else:
-                            self.log("Errore durante il salvataggio del file Excel", 'error')                            
-
-                                
-                        ### Verifico che il df  contenga fl con lingua attualmente in uso nella sessione di SAP
-                        result, df_filtrato = self.Check_Lang(df_renamed, self.infoLanguage)
-                        if result:
-                                
-                                ### Aggiorno i valori delle fl contenute nel df
-                                success, df_result = extractor.update_FL_parallel(df_filtrato, self.session_manager, n_workers=4)
-
-                                if success:
-                                    # creo una statistica degli aggiornamenti eseguiti
-                                    result_stat = self.analyze_result(df_result)   
-
-                                    df_result = self.check_modifications_detailed(df_result)     
-
-                                    # Creo il nome del file per salvare i dati
-                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                    file_Excel = f"FL_aggiornate_" + timestamp + ".xlsx"
-                                    self.log(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
-                                    # Salvo il DataFrame in un file Excel
-                                    if self.save_excel_file_advanced(df_result, file_Excel,
-                                                                    sheet_name='Dati_modificati',
-                                                                    index=False,
-                                                                    overwrite=True):
-                                        self.log("File Excel salvato con successo", 'success')
-                                    else:
-                                        self.log("Errore durante il salvataggio del file Excel", 'error')
-                                else:
-                                    self.log("Aggiornamento interrotto — salvataggio dati parziali", 'warning')
-                                    self._save_partial_results(df_result)
-                        else:
-                            self.log("Errore durante l'elaborazione del df", 'error')
-
-                    self.log("Elaborazione terminata", 'success')
-
-                else:
-                    self.log("Connessione SAP NON attiva", 'error')
-                    return
-        except Exception as e:
-            self.log(f"Estrazione dati SAP: Errore: {str(e)}", 'error')
-            self._save_partial_results(df_result)
+        result, self.fl_dictionary = self.validate_clipboard_data()
+        if not result:
+            self.log("Dati inseriti non validi", 'error')
             return
 
-        # ----------------------------------------------------
-        # Verifica completata - ripristino il tasto di estrazione dei dati
-        # ---------------------------------------------------- 
-        self.extract_button.setEnabled(True)
+        self.extract_button.setEnabled(False)
+        self.status_label.setText("Avvio elaborazione SAP...")
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.elapsed_label.setText("00:00:00")
+        self.start_time = datetime.now()
+        self.elapsed_timer.start(1000)
+
+        self.sap_worker = SAPWorker(self)
+        self.sap_worker.progress_updated.connect(self._on_progress_updated)
+        self.sap_worker.operation_done.connect(self._on_worker_finished)
+        self.sap_worker.start()
 
 
 

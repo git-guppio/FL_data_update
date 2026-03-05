@@ -2,7 +2,7 @@
 #   Scopo del programma
 # ============================================================================
 
-# Se sono modificati i valori nella tabella CTR_ASS la modifiche non vengono atuomaticamente lette (non si propagnano) nelle tabelle
+# Se sono modificati i valori nella tabella CTR_ASS la modifiche non vengono automaticamente lette (non si propagnano) nelle tabelle
 che riportano la descrizione delle FL (ad esempio la tab IFLO)
 Per permettere che i dati siano aggiornati è necessario entrare in modifica in una FL con la transazione IL02 e aggiornare un campo (come ad esempio la descrizione) e salvare i dati.
 In tal modo i dati vengono riletti e aggiornati.

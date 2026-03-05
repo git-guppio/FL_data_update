@@ -515,7 +515,8 @@ class SAPDataExtractor:
         self,
         df_input: pd.DataFrame,
         session_manager,
-        n_workers: int = None
+        n_workers: int = None,
+        progress_callback=None
     ) -> Tuple[bool, Optional[pd.DataFrame]]:
         """
         Versione multi-thread di update_FL().
@@ -567,7 +568,7 @@ class SAPDataExtractor:
         # Usata dai worker via closure — nessuna I/O nel loop dei thread.
         # -----------------------------------------------------------------
         grp_lookup: dict = {}
-        csv_path = Path(__file__).parent / "GruppoResponsabilePianificazione.csv"
+        csv_path = Path(__file__).parent / "config" / "GruppoResponsabilePianificazione.csv"
         try:
             df_grp = pd.read_csv(csv_path, dtype=str).fillna("")
             grp_lookup = dict(zip(
@@ -743,6 +744,8 @@ class SAPDataExtractor:
                         completed += 1
                         if res["Result"] not in ("S", ""):
                             errors += 1
+                        if progress_callback:
+                            progress_callback(completed, total)
 
                     except concurrent.futures.TimeoutError:
                         df.at[original_idx, "Result"]     = "X"
@@ -750,6 +753,8 @@ class SAPDataExtractor:
                         self.log_message(f"[idx {original_idx}] Timeout operazione", "error")
                         completed += 1
                         errors    += 1
+                        if progress_callback:
+                            progress_callback(completed, total)
 
                     except Exception as e:
                         df.at[original_idx, "Result"]     = "X"
@@ -759,6 +764,8 @@ class SAPDataExtractor:
                         )
                         completed += 1
                         errors    += 1
+                        if progress_callback:
+                            progress_callback(completed, total)
 
         except Exception as critical_error:
             # Errore bloccante (es. crash SAP, disconnessione di rete):
