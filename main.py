@@ -7,7 +7,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout,
                            QHBoxLayout, QWidget, QTextEdit, QListWidget, QLabel, QMessageBox,
                            QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction,
-                           QProgressBar)
+                           QProgressBar, QSpinBox, QCheckBox, QGroupBox, QFormLayout)
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QCursor, QFont, QTextCursor
 
@@ -36,6 +36,101 @@ from config.settings import AppSettings
 
 # # Logger specifico per questo modulo
 # logger = logging.getLogger("main").setLevel(logging.DEBUG)
+
+
+# =============================================================================
+# Dialog di configurazione (aperta dal gear button).
+# Legge i valori correnti da AppSettings e li salva in-memory.
+# =============================================================================
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Impostazioni")
+        self.setMinimumWidth(380)
+        self._build_ui()
+        self._load_values()
+
+    def _build_ui(self):
+        main_layout = QVBoxLayout(self)
+
+        # --- Sezione SAP ---
+        grp_sap = QGroupBox("SAP")
+        form_sap = QFormLayout(grp_sap)
+
+        self.spin_workers = QSpinBox()
+        self.spin_workers.setRange(1, 8)
+        self.spin_workers.setToolTip("Numero di sessioni SAP parallele (default 4)")
+        form_sap.addRow("Worker paralleli:", self.spin_workers)
+
+        self.spin_timeout = QSpinBox()
+        self.spin_timeout.setRange(10, 300)
+        self.spin_timeout.setSuffix(" s")
+        self.spin_timeout.setToolTip("Timeout per singola FL in secondi (default 60)")
+        form_sap.addRow("Timeout per FL:", self.spin_timeout)
+
+        main_layout.addWidget(grp_sap)
+
+        # --- Sezione pausa ---
+        self.chk_pause = QCheckBox("Abilita pausa periodica anti-saturazione SAP")
+        main_layout.addWidget(self.chk_pause)
+
+        self.grp_pause = QGroupBox("Parametri pausa")
+        form_pause = QFormLayout(self.grp_pause)
+
+        self.spin_batch = QSpinBox()
+        self.spin_batch.setRange(100, 10000)
+        self.spin_batch.setSingleStep(100)
+        self.spin_batch.setToolTip("Numero di FL elaborate prima di ogni pausa")
+        form_pause.addRow("FL per batch:", self.spin_batch)
+
+        self.spin_base_delay = QSpinBox()
+        self.spin_base_delay.setRange(10, 3600)
+        self.spin_base_delay.setSuffix(" s")
+        self.spin_base_delay.setToolTip("Durata base della pausa in secondi")
+        form_pause.addRow("Durata pausa base:", self.spin_base_delay)
+
+        self.chk_progressive = QCheckBox("Incrementa pausa ad ogni batch")
+        form_pause.addRow(self.chk_progressive)
+
+        self.spin_increment = QSpinBox()
+        self.spin_increment.setRange(5, 600)
+        self.spin_increment.setSuffix(" s")
+        self.spin_increment.setToolTip("Secondi aggiuntivi aggiunti ad ogni batch successivo")
+        form_pause.addRow("Incremento per batch:", self.spin_increment)
+
+        main_layout.addWidget(self.grp_pause)
+
+        # Bottoni OK/Annulla
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(self._save_values)
+        btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(btn_box)
+
+        # Connessioni enable/disable
+        self.chk_pause.toggled.connect(self.grp_pause.setEnabled)
+        self.chk_progressive.toggled.connect(self.spin_increment.setEnabled)
+
+    def _load_values(self):
+        self.spin_workers.setValue(AppSettings.DEFAULT_WORKERS)
+        self.spin_timeout.setValue(AppSettings.FL_TIMEOUT)
+        self.chk_pause.setChecked(AppSettings.PAUSE_ENABLED)
+        self.spin_batch.setValue(AppSettings.PAUSE_BATCH_SIZE)
+        self.spin_base_delay.setValue(AppSettings.PAUSE_BASE_DELAY)
+        self.chk_progressive.setChecked(AppSettings.PAUSE_PROGRESSIVE)
+        self.spin_increment.setValue(AppSettings.PAUSE_INCREMENT)
+        # Stato iniziale enable/disable
+        self.grp_pause.setEnabled(AppSettings.PAUSE_ENABLED)
+        self.spin_increment.setEnabled(AppSettings.PAUSE_PROGRESSIVE)
+
+    def _save_values(self):
+        AppSettings.DEFAULT_WORKERS   = self.spin_workers.value()
+        AppSettings.FL_TIMEOUT        = self.spin_timeout.value()
+        AppSettings.PAUSE_ENABLED     = self.chk_pause.isChecked()
+        AppSettings.PAUSE_BATCH_SIZE  = self.spin_batch.value()
+        AppSettings.PAUSE_BASE_DELAY  = self.spin_base_delay.value()
+        AppSettings.PAUSE_PROGRESSIVE = self.chk_progressive.isChecked()
+        AppSettings.PAUSE_INCREMENT   = self.spin_increment.value()
+        self.accept()
 
 
 # =============================================================================
@@ -320,6 +415,13 @@ class MainWindow(QMainWindow, BaseComponent):
         self.upload_button.setEnabled(False)  # Disabilitato finché non implementato
         button_layout.addWidget(self.upload_button)
         
+        # Bottone Impostazioni (gear)
+        self.settings_button = QPushButton("⚙")
+        self.settings_button.setFixedWidth(32)
+        self.settings_button.setToolTip("Impostazioni")
+        self.settings_button.clicked.connect(self.open_settings)
+        button_layout.addWidget(self.settings_button)
+
         # Aggiungi il layout dei bottoni al layout principale
         main_layout.addLayout(button_layout)
 
@@ -546,6 +648,11 @@ class MainWindow(QMainWindow, BaseComponent):
             else:
                 self.log(f"FL star = {len(fl_dictionary.keys()) -1}", 'info')
             return True, fl_dictionary        
+
+    # ----------------------------------------------------
+    def open_settings(self):
+        dlg = SettingsDialog(self)
+        dlg.exec_()
 
     # ----------------------------------------------------
     # Salvataggio dati parziali in caso di errore

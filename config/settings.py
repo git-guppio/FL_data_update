@@ -34,7 +34,15 @@ class AppSettings:
     LOG_FONT_SIZE = 9
     
     # Threading Settings
-    DEFAULT_WORKERS = 4
+    DEFAULT_WORKERS    = 4       # Numero di sessioni SAP parallele
+    FL_TIMEOUT         = 60      # Secondi di attesa per singola FL (timeout)
+
+    # Pausa periodica anti-saturazione SAP
+    PAUSE_ENABLED      = False   # Attiva/disattiva la pausa
+    PAUSE_BATCH_SIZE   = 1000    # FL per batch prima della pausa
+    PAUSE_BASE_DELAY   = 60      # Durata base pausa in secondi
+    PAUSE_PROGRESSIVE  = True    # True = pausa cresce ad ogni batch
+    PAUSE_INCREMENT    = 30      # Secondi aggiuntivi per ogni batch successivo
     
     # # Tecnologie supportate
     # TECNOLOGIE = {

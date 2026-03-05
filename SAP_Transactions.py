@@ -712,29 +712,41 @@ class SAPDataExtractor:
 
         # -----------------------------------------------------------------
         # Orchestrazione parallela.
-        # submit() una FL per volta → il pool le distribuisce automaticamente
-        # ai worker liberi (round-robin naturale).
         # -----------------------------------------------------------------
-        completed = 0
-        errors    = 0
+        # Legge parametri pausa da AppSettings (modificabili dal dialog).
+        # -----------------------------------------------------------------
+        import time as _time
+        fl_timeout     = AppSettings.FL_TIMEOUT
+        pause_enabled  = AppSettings.PAUSE_ENABLED
+        batch_size     = AppSettings.PAUSE_BATCH_SIZE
+        base_delay     = AppSettings.PAUSE_BASE_DELAY
+        progressive    = AppSettings.PAUSE_PROGRESSIVE
+        increment      = AppSettings.PAUSE_INCREMENT
 
-        try:
+        # Suddivide df_input in batch; se pausa disabilitata, un unico batch.
+        rows = list(df_input.iterrows())
+        if pause_enabled and batch_size > 0:
+            batches = [rows[i:i + batch_size] for i in range(0, len(rows), batch_size)]
+        else:
+            batches = [rows]
+
+        completed  = 0
+        errors     = 0
+
+        def _process_batch(batch_rows):
+            nonlocal completed, errors
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=n_workers,
                 thread_name_prefix="SAP_Worker"
             ) as executor:
-                # dict future → index originale (per gestire timeout/eccezioni)
                 futures = {
                     executor.submit(_process_single_fl, idx, row): idx
-                    for idx, row in df_input.iterrows()
+                    for idx, row in batch_rows
                 }
-
-                # as_completed() gira nel thread principale: unico scrittore su df.
-                # Nessun lock necessario — i worker non toccano mai df.
                 for future in concurrent.futures.as_completed(futures):
                     original_idx = futures[future]
                     try:
-                        res = future.result(timeout=60)
+                        res = future.result(timeout=fl_timeout)
                         for col in (
                             "Result", "Result_txt",
                             "N_Tipologia", "N_Componente",
@@ -744,17 +756,13 @@ class SAPDataExtractor:
                         completed += 1
                         if res["Result"] not in ("S", ""):
                             errors += 1
-                        if progress_callback:
-                            progress_callback(completed, total)
 
                     except concurrent.futures.TimeoutError:
                         df.at[original_idx, "Result"]     = "X"
-                        df.at[original_idx, "Result_txt"] = "Timeout operazione (60s)"
+                        df.at[original_idx, "Result_txt"] = f"Timeout operazione ({fl_timeout}s)"
                         self.log_message(f"[idx {original_idx}] Timeout operazione", "error")
                         completed += 1
                         errors    += 1
-                        if progress_callback:
-                            progress_callback(completed, total)
 
                     except Exception as e:
                         df.at[original_idx, "Result"]     = "X"
@@ -764,13 +772,31 @@ class SAPDataExtractor:
                         )
                         completed += 1
                         errors    += 1
-                        if progress_callback:
-                            progress_callback(completed, total)
+
+                    if progress_callback:
+                        progress_callback(completed, total)
+
+        try:
+            for batch_num, batch_rows in enumerate(batches):
+                # Pausa prima di ogni batch (eccetto il primo)
+                if pause_enabled and batch_num > 0:
+                    delay = base_delay + (increment * (batch_num - 1) if progressive else 0)
+                    self.log_message(
+                        f"Pausa anti-saturazione SAP: {delay}s "
+                        f"(batch {batch_num}/{len(batches)}, "
+                        f"{'progressiva +' + str(increment) + 's' if progressive else 'fissa'})",
+                        "info"
+                    )
+                    _time.sleep(delay)
+
+                self.log_message(
+                    f"Batch {batch_num + 1}/{len(batches)}: "
+                    f"{len(batch_rows)} FL ({completed + 1}-{completed + len(batch_rows)} di {total})",
+                    "info"
+                )
+                _process_batch(batch_rows)
 
         except Exception as critical_error:
-            # Errore bloccante (es. crash SAP, disconnessione di rete):
-            # i future ancora in coda vengono abbandonati, ma df contiene già
-            # i risultati delle FL elaborate fino a questo momento.
             self.log_message(
                 f"Errore critico durante l'aggiornamento parallelo: {critical_error}",
                 "error"
@@ -779,8 +805,7 @@ class SAPDataExtractor:
                 f"Dati parziali disponibili: {completed}/{total} FL elaborate prima dell'interruzione",
                 "warning"
             )
-            return False, df  # df parziale: righe elaborate hanno Result valorizzato,
-                               # righe non ancora elaborate hanno Result = ""
+            return False, df
 
         self.log_message(
             f"Aggiornamento completato: {completed - errors}/{total} OK, {errors} errori",
