@@ -4,6 +4,7 @@ import os
 import sys
 import pandas as pd
 from datetime import datetime
+from collections import deque
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout,
                            QHBoxLayout, QWidget, QTextEdit, QListWidget, QLabel, QMessageBox,
                            QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction,
@@ -445,6 +446,17 @@ class MainWindow(QMainWindow, BaseComponent):
         self.elapsed_label.setFixedWidth(65)
         sb.addPermanentWidget(self.elapsed_label)
 
+        sep = QLabel("|")
+        sep.setFixedWidth(10)
+        sep.setAlignment(Qt.AlignCenter)
+        sb.addPermanentWidget(sep)
+
+        self.eta_label = QLabel("ETA --:--:--")
+        self.eta_label.setFixedWidth(90)
+        sb.addPermanentWidget(self.eta_label)
+
+        sb.setStyleSheet("QStatusBar { border-top: 1px solid #b0b0b0; }")
+
     # ----------------------------------------------------
     # Elapsed time
     # ----------------------------------------------------
@@ -464,12 +476,29 @@ class MainWindow(QMainWindow, BaseComponent):
             self.progress_bar.setValue(completed)
             self.status_label.setText(f"Aggiornamento FL: {completed} / {total}")
 
+            # --- ETA con media mobile (ultime 50 FL) ---
+            self._fl_timestamps.append(datetime.now())
+            min_sample = max(10, int(total * 0.02))
+            if len(self._fl_timestamps) >= min_sample and completed < total:
+                window_sec = (
+                    self._fl_timestamps[-1] - self._fl_timestamps[0]
+                ).total_seconds()
+                if window_sec > 0:
+                    rate = (len(self._fl_timestamps) - 1) / window_sec  # FL/s
+                    eta_sec = int((total - completed) / rate)
+                    h, r = divmod(eta_sec, 3600)
+                    m, s = divmod(r, 60)
+                    self.eta_label.setText(f"ETA {h:02d}:{m:02d}:{s:02d}")
+            elif completed >= total:
+                self.eta_label.setText("ETA 00:00:00")
+
     # ----------------------------------------------------
     # Slot: worker terminato
     # ----------------------------------------------------
     def _on_worker_finished(self, success: bool):
         self.elapsed_timer.stop()
         self.progress_bar.setVisible(False)
+        self.eta_label.setText("ETA --:--:--")
         self.extract_button.setEnabled(True)
         if success:
             self.status_label.setText("Elaborazione completata")
@@ -700,6 +729,8 @@ class MainWindow(QMainWindow, BaseComponent):
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.elapsed_label.setText("00:00:00")
+        self.eta_label.setText("ETA --:--:--")
+        self._fl_timestamps = deque(maxlen=50)
         self.start_time = datetime.now()
         self.elapsed_timer.start(1000)
 
