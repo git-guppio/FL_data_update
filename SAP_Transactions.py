@@ -1,4 +1,5 @@
 import time
+import concurrent.futures
 import pandas as pd
 import pyperclip
 import win32clipboard
@@ -7,40 +8,6 @@ import re
 from typing import List, Dict, Optional
 from typing import Dict, Any, Optional, Tuple
 from collections import Counter
-
-
-class SAPDataUpLoader:
-    """ 
-    Classe: SAPDataUpLoader
-    Descrizione: Classe contenente i metodi per l' aggiornamento delle tabelle globali in SAP 
-    """
-    def __init__(self, session):
-        """
-        Inizializza la classe con una sessione SAP attiva
-        
-        Args:
-            session: Oggetto sessione SAP attiva
-        """
-        self.session = session
-
-    def update_table(self, table_name: str, data: pd.DataFrame) -> bool:
-        """
-        Aggiorna una tabella SAP con i dati forniti
-        
-        Args:
-            table_name (str): Nome della tabella da aggiornare
-            data (pd.DataFrame): Dati da inserire nella tabella
-            
-        Returns:
-            bool: True se l'aggiornamento è riuscito, False altrimenti
-        """
-        try:
-
-            return True
-        except Exception as e:
-            print(f"Errore durante l'aggiornamento della tabella {table_name}: {str(e)}")
-            return False    
-
 
 class SAPDataExtractor:
     """
@@ -96,102 +63,108 @@ class SAPDataExtractor:
 
     def check_sap_bar(self, message_bar: str, use_regex: bool = False) -> bool:
         """
-        Verifica la presenza di un messaggio SAP nella lingua specificata
-        
+        Verifica la presenza di un messaggio specifico nella status bar SAP.
+
         Args:
-            message_bar (str): Chiave del messaggio (es: 'data_browser_selection')
-            lang (str): Codice lingua (es: 'IT', 'EN', 'DE')
-            
+            message_bar (str): Chiave del messaggio da cercare (es: 'B_IH06_no_data_result')
+            use_regex (bool): Se True usa re.search, altrimenti confronto per sottostringa
+
         Returns:
-            bool: True se il messaggio è trovato, False altrimenti
+            True  — il messaggio atteso È presente nella status bar (condizione rilevata)
+            False — la status bar è vuota o contiene un testo diverso da quello atteso
+
+        Raises:
+            RuntimeError: se main_window non è disponibile o la lingua non è supportata,
+                          in modo che il chiamante non interpreti erroneamente il False
+                          come "nessun errore".
         """
+        # --- Recupero lingua: fallimento esplicito, non silenzioso ---
+        if self.main_window is None:
+            raise RuntimeError("check_sap_bar: main_window non impostato, impossibile determinare la lingua SAP")
         lang = self.main_window.infoLanguage
+
         try:
             window_bar = self.session.findById("wnd[0]/sbar").text
-            # Verifica che il message_bar esista
-            if message_bar not in self.SAP_MESSAGES:
-                self.log_message(f"Message key '{message_bar}' non trovato", 'error')
+
+            # Status bar vuota → nessun messaggio → False (nessun errore)
+            if not window_bar or not window_bar.strip():
                 return False
-            
-            # Verifica che la lingua esista per questo messaggio
+
+            # Verifica che la chiave esista nel dizionario
+            if message_bar not in self.SAP_MESSAGES:
+                raise RuntimeError(f"check_sap_bar: chiave '{message_bar}' non trovata in SAP_MESSAGES")
+
+            # Verifica che la lingua sia supportata per questa chiave
             messages = self.SAP_MESSAGES[message_bar]
             if lang not in messages:
-                self.log_message(f"Lingua '{lang}' non supportata per '{message_bar}'. Lingue disponibili: {list(messages.keys())}", 'error')
-                return False
-            
-            # Cerca il pattern nella lingua specifica
-            expected_pattern = messages[lang]            
-            
-            # Verifica con regex o stringa normale
+                raise RuntimeError(
+                    f"check_sap_bar: lingua '{lang}' non supportata per '{message_bar}'. "
+                    f"Lingue disponibili: {list(messages.keys())}"
+                )
+
+            expected_pattern = messages[lang]
+
+            # Confronto: regex o sottostringa
             if use_regex:
-                match = re.search(expected_pattern, window_bar, re.IGNORECASE)
-                if match:
-                    self.log_message(f"✅ Pattern regex trovato in {lang}: '{expected_pattern}' -> '{match.group()}'", 'success')
-                    return True
-                else:
-                    self.log_message(f"❌ Pattern regex non trovato in {lang}: '{expected_pattern}'", 'error')
-                    return False            
-            
-            if expected_pattern in window_bar:
-                self.log_message(f"✅ Finestra trovata in {lang}: {expected_pattern}", 'success')
-                return True
+                return bool(re.search(expected_pattern, window_bar, re.IGNORECASE))
             else:
-                self.log_message(f"❌ Pattern non trovato in {lang}. Atteso: '{expected_pattern}', Trovato: '{window_bar}'", 'error')
-                return False
-            
+                return expected_pattern in window_bar
+
+        except RuntimeError:
+            raise
         except Exception as e:
-            self.log_message(f"Errore verifica finestra: {e}", 'error')
-            return False
+            self.log_message(f"check_sap_bar: errore lettura status bar SAP: {e}", 'error')
+            raise RuntimeError(f"check_sap_bar: impossibile leggere la status bar: {e}") from e
 
     def check_sap_window(self, message_key: str, use_regex: bool = False) -> bool:
         """
-        Verifica la presenza di un messaggio SAP nella lingua specificata
-        
+        Verifica che il titolo della finestra SAP corrisponda al messaggio atteso.
+
         Args:
-            message_key (str): Chiave del messaggio (es: 'data_browser_selection')
-            lang (str): Codice lingua (es: 'IT', 'EN', 'DE')
-            
+            message_key (str): Chiave del messaggio da cercare (es: 'W_IH06_single_data_result')
+            use_regex (bool): Se True usa re.search, altrimenti confronto per sottostringa
+
         Returns:
-            bool: True se il messaggio è trovato, False altrimenti
+            True  — il titolo della finestra corrisponde al pattern atteso
+            False — il titolo è diverso da quello atteso
+
+        Raises:
+            RuntimeError: se main_window non è disponibile, la chiave non esiste,
+                          o la lingua non è supportata.
         """
+        # --- Recupero lingua: fallimento esplicito, non silenzioso ---
+        if self.main_window is None:
+            raise RuntimeError("check_sap_window: main_window non impostato, impossibile determinare la lingua SAP")
         lang = self.main_window.infoLanguage
+
         try:
             window_text = self.session.findById("wnd[0]").text
-            
-            # Verifica che il message_key esista
+
+            # Verifica che la chiave esista nel dizionario
             if message_key not in self.SAP_MESSAGES:
-                self.log_message(f"Message key '{message_key}' non trovato", 'error')
-                return False
-            
-            # Verifica che la lingua esista per questo messaggio
+                raise RuntimeError(f"check_sap_window: chiave '{message_key}' non trovata in SAP_MESSAGES")
+
+            # Verifica che la lingua sia supportata per questa chiave
             messages = self.SAP_MESSAGES[message_key]
             if lang not in messages:
-                self.log_message(f"Lingua '{lang}' non supportata per '{message_key}'.\nLingue disponibili: {list(messages.keys())}", 'error')
-                return False
-            
-            # Cerca il pattern nella lingua specifica
+                raise RuntimeError(
+                    f"check_sap_window: lingua '{lang}' non supportata per '{message_key}'. "
+                    f"Lingue disponibili: {list(messages.keys())}"
+                )
+
             expected_pattern = messages[lang]
 
-            # Verifica con regex o stringa normale
+            # Confronto: regex o sottostringa
             if use_regex:
-                match = re.search(expected_pattern, window_text, re.IGNORECASE)
-                if match:
-                    self.log_message(f"✅ Pattern regex trovato in {lang}: '{expected_pattern}' -> '{match.group()}'", 'success')
-                    return True
-                else:
-                    self.log_message(f"❌ Pattern regex non trovato in {lang}: '{expected_pattern}'", 'error')
-                    return False  
-            
-            if expected_pattern in window_text:
-                self.log_message(f"✅ Finestra trovata in {lang}: {expected_pattern}", 'success')
-                return True
+                return bool(re.search(expected_pattern, window_text, re.IGNORECASE))
             else:
-                self.log_message(f"❌ Pattern non trovato in {lang}. \nAtteso: '{expected_pattern}', \nTrovato: '{window_text}'", 'error')
-                return False
-            
+                return expected_pattern in window_text
+
+        except RuntimeError:
+            raise
         except Exception as e:
-            self.log_message(f"Errore verifica finestra: {e}", 'error')
-            return False
+            self.log_message(f"check_sap_window: errore lettura titolo finestra SAP: {e}", 'error')
+            raise RuntimeError(f"check_sap_window: impossibile leggere il titolo della finestra: {e}") from e
 
     def log_message(self, message, icon_type='info'):
         """Wrapper per il log_message della main window"""
@@ -272,7 +245,8 @@ class SAPDataExtractor:
             # Più di un valore trovato
             elif self.check_sap_window('W_IH06_multiple_data_result'):
                 num_elementi = self.session.findById("wnd[0]/usr/cntlGRID1/shellcont/shell").RowCount
-                self.log_message(f"Numero di elementi per la FL {fl if '*' in fl else 'lista'} = {num_elementi}", "info")
+                fl_label = fl if '*' in fl else f"lista ({fl.count(chr(10)) + 1} FL)"
+                self.log_message(f"Numero di elementi per la FL {fl_label} = {num_elementi}", "info")
                 self.session.findById("wnd[0]/mbar/menu[0]/menu[10]/menu[2]").select()
                 time.sleep(0.5)  
                 self.session.findById("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[4,0]").select()
@@ -420,7 +394,7 @@ class SAPDataExtractor:
                 raise ValueError(f"Nessun dato presente nella clipboard")
             result, df_fl = self.clean_data(fl_data)
             if not result:
-                raise ValueError(f"Errore durante la pulizia dei dati della FL {fl}")
+                raise ValueError(f"Errore durante la pulizia dei dati tabella IFLO")
             else:
                 return True, df_fl
         
@@ -533,9 +507,279 @@ class SAPDataExtractor:
             # Se sono state aggiornate tutte le righe restituisco True e il df
             return True, df
         
-        except Exception as e:  
+        except Exception as e:
             self.log_message(f"Errore durante la modifica della FL {fl}: \n{str(e)}")
             return False, None
+
+    def update_FL_parallel(
+        self,
+        df_input: pd.DataFrame,
+        session_manager,
+        n_workers: int = None
+    ) -> Tuple[bool, Optional[pd.DataFrame]]:
+        """
+        Versione multi-thread di update_FL().
+
+        Ogni FL viene processata da un thread separato su una propria sessione SAP.
+        I thread non scrivono mai sul DataFrame condiviso: restituiscono un dict
+        con i propri risultati. Solo il thread principale (loop as_completed) scrive
+        sul df, eliminando qualsiasi race condition.
+
+        Distribuzione del carico: round-robin automatico tramite ThreadPoolExecutor
+        (ogni worker libero preleva il task successivo dalla coda).
+
+        Args:
+            df_input:        DataFrame con le FL da aggiornare (colonne: "Sede tecnica",
+                             "Definizione della sede tecnica", ...)
+            session_manager: Istanza di SAPSessionManager già inizializzata
+            n_workers:       Numero di sessioni parallele.
+                             Default: AppSettings.MAX_SAP_SESSIONS
+
+        Returns:
+            Tuple[bool, Optional[pd.DataFrame]]:
+                - True e df con le colonne Result/Result_txt/N_* compilate
+                - False e None in caso di errore bloccante
+        """
+        from config.settings import AppSettings
+        from pathlib import Path
+
+        if n_workers is None:
+            n_workers = AppSettings.MAX_SAP_SESSIONS
+
+        df = df_input.copy()
+        df["Result"]      = ""
+        df["Result_txt"]  = ""
+        df["N_Tipologia"] = ""
+        df["N_Componente"] = ""
+        df["N_Sezione"]   = ""
+        df["N_Tipo ogg."] = ""
+        df["N_Prof.cat."] = ""
+
+        total = len(df)
+        self.log_message(
+            f"Avvio aggiornamento parallelo: {total} FL su {n_workers} sessioni",
+            "info"
+        )
+
+        # -----------------------------------------------------------------
+        # Caricamento tabella GruppoResponsabilePianificazione (una volta sola).
+        # Struttura: { "ITS-0BAR": "IS0", "ITS-0CZS": "ITS", ... }
+        # Usata dai worker via closure — nessuna I/O nel loop dei thread.
+        # -----------------------------------------------------------------
+        grp_lookup: dict = {}
+        csv_path = Path(__file__).parent / "GruppoResponsabilePianificazione.csv"
+        try:
+            df_grp = pd.read_csv(csv_path, dtype=str).fillna("")
+            grp_lookup = dict(zip(
+                df_grp["2 livello"].str.strip(),
+                df_grp["Gr. resp. pian. man."].str.strip()
+            ))
+            self.log_message(
+                f"Tabella GRP caricata: {len(grp_lookup)} voci da {csv_path.name}",
+                "info"
+            )
+        except Exception as e:
+            self.log_message(
+                f"Attenzione: impossibile caricare {csv_path.name}: {e} — grp sarà vuoto per tutte le FL",
+                "warning"
+            )
+
+        # -----------------------------------------------------------------
+        # Worker: processa UNA singola FL.
+        # Accede solo a variabili locali e alla propria sessione SAP.
+        # Non tocca mai il df condiviso — restituisce un dict.
+        # -----------------------------------------------------------------
+        def _process_single_fl(index: int, row: pd.Series) -> dict:
+            result = {
+                "index":        index,
+                "Result":       "",
+                "Result_txt":   "",
+                "N_Tipologia":  "",
+                "N_Componente": "",
+                "N_Sezione":    "",
+                "N_Tipo ogg.":  "",
+                "N_Prof.cat.":  "",
+            }
+            fl          = str(row["Sede tecnica"]).strip()
+            descrizione = str(row["Definizione della sede tecnica"]).strip()
+
+            # Ricava il prefisso a 2 livelli (es. "ITS-0BAR-EL-001" → "ITS-0BAR")
+            # e cerca il Gruppo Responsabile Pianificazione nella tabella caricata.
+            parts = fl.split("-")
+            fl_2livello = "-".join(parts[:2]) if len(parts) >= 2 else fl
+            grp = grp_lookup.get(fl_2livello, "")
+
+            with session_manager.get_session() as session:
+                if session is None:
+                    result["Result"]     = "X"
+                    result["Result_txt"] = "Sessione non disponibile"
+                    self.log_message(f"[FL {fl}] Sessione non disponibile", "error")
+                    return result
+
+                try:
+                    # Apro transazione IL02
+                    session.findById("wnd[0]/tbar[0]/okcd").text = "/nIL02"
+                    session.findById("wnd[0]").sendVKey(0)
+                    time.sleep(0.25)
+
+                    # Inserisco la FL da modificare
+                    session.findById("wnd[0]/usr/ctxtIFLO-TPLNR").text = fl
+                    session.findById("wnd[0]").sendVKey(0)
+                    time.sleep(0.25)
+
+                    # Inserisco la descrizione (trigger aggiornamento cache SAP)
+                    session.findById("wnd[0]/usr/txtIFLO-PLTXT").text = descrizione
+                    session.findById("wnd[0]").sendVKey(0)
+                    time.sleep(0.25)
+
+                    # Verifico errori post-inserimento descrizione
+                    icon_type = session.findById("wnd[0]/sbar").MessageType
+                    if icon_type != "":
+                        result["Result"]     = icon_type
+                        result["Result_txt"] = session.findById("wnd[0]/sbar").text
+                        self.log_message(
+                            f"[FL {fl}] Errore nella modifica: {result['Result_txt']}",
+                            "error"
+                        )
+                        return result
+
+                    # Leggo i valori aggiornati dalla tab T\01
+                    try:
+                        result["N_Tipo ogg."] = session.findById(
+                            r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102"
+                            r"/subSUB_0102A:SAPLITO0:1020/subSUB_1020A:SAPLITO0:1025/ctxtITOB-EQART"
+                        ).text
+                        result["N_Tipologia"] = session.findById(
+                            r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102"
+                            r"/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SIST"
+                        ).text
+                        result["N_Componente"] = session.findById(
+                            r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102"
+                            r"/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_PARTE"
+                        ).text
+                        result["N_Sezione"] = session.findById(
+                            r"wnd[0]/usr/tabsTABSTRIP/tabpT\01/ssubSUB_DATA:SAPLITO0:0102"
+                            r"/subSUB_0102D:SAPLITO0:1080/subXUSR1080:SAPLXTOB:1001/txtIFLOT-CODE_SEZ_PM"
+                        ).text
+
+                        # Cambio tab T\03 per leggere Prof.cat.
+                        session.findById(r"wnd[0]/usr/tabsTABSTRIP/tabpT\03").select()
+                        time.sleep(0.25)
+                        result["N_Prof.cat."] = session.findById(
+                            r"wnd[0]/usr/tabsTABSTRIP/tabpT\03/ssubSUB_DATA:SAPLITO0:0102"
+                            r"/subSUB_0102B:SAPLITO0:1062/ctxtITOB-RBNR"
+                        ).text
+
+                        if grp:  # Se ho trovato un gruppo responsabile pianificazione, allora lo inserisco
+                            session.findById(
+                                r"wnd[0]/usr/tabsTABSTRIP/tabpT\03/ssubSUB_DATA:SAPLITO0:0102"
+                                r"/subSUB_0102B:SAPLITO0:1062/ctxtITOB-INGRP"
+                            ).text = grp  # Aggiorno il campo "Gr. resp
+
+                    except Exception as e:
+                        result["Result"]     = "X"
+                        result["Result_txt"] = "Errore nella lettura dei valori"
+                        self.log_message(f"[FL {fl}] Errore lettura valori: {str(e)}", "error")
+                        return result
+
+                    # Salvo
+                    session.findById("wnd[0]/tbar[0]/btn[11]").press()
+
+                    # Leggo esito salvataggio
+                    try:
+                        icon_type = session.findById("wnd[0]/sbar").MessageType
+                        result["Result"]     = icon_type
+                        result["Result_txt"] = session.findById("wnd[0]/sbar").text
+                        if icon_type != "S":
+                            self.log_message(
+                                f"[FL {fl}] Errore salvataggio: {result['Result_txt']}",
+                                "error"
+                            )
+                        else:
+                            self.log_message(f"[FL {fl}] Aggiornata con successo", "success")
+                    except Exception as e:
+                        result["Result"]     = "X"
+                        result["Result_txt"] = "Errore lettura icona post-salvataggio"
+                        self.log_message(f"[FL {fl}] {result['Result_txt']}: {str(e)}", "error")
+
+                except Exception as e:
+                    result["Result"]     = "X"
+                    result["Result_txt"] = f"Errore generale: {str(e)}"
+                    self.log_message(f"[FL {fl}] Errore imprevisto: {str(e)}", "error")
+
+            return result
+
+        # -----------------------------------------------------------------
+        # Orchestrazione parallela.
+        # submit() una FL per volta → il pool le distribuisce automaticamente
+        # ai worker liberi (round-robin naturale).
+        # -----------------------------------------------------------------
+        completed = 0
+        errors    = 0
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=n_workers,
+                thread_name_prefix="SAP_Worker"
+            ) as executor:
+                # dict future → index originale (per gestire timeout/eccezioni)
+                futures = {
+                    executor.submit(_process_single_fl, idx, row): idx
+                    for idx, row in df_input.iterrows()
+                }
+
+                # as_completed() gira nel thread principale: unico scrittore su df.
+                # Nessun lock necessario — i worker non toccano mai df.
+                for future in concurrent.futures.as_completed(futures):
+                    original_idx = futures[future]
+                    try:
+                        res = future.result(timeout=60)
+                        for col in (
+                            "Result", "Result_txt",
+                            "N_Tipologia", "N_Componente",
+                            "N_Sezione", "N_Tipo ogg.", "N_Prof.cat."
+                        ):
+                            df.at[res["index"], col] = res[col]
+                        completed += 1
+                        if res["Result"] not in ("S", ""):
+                            errors += 1
+
+                    except concurrent.futures.TimeoutError:
+                        df.at[original_idx, "Result"]     = "X"
+                        df.at[original_idx, "Result_txt"] = "Timeout operazione (60s)"
+                        self.log_message(f"[idx {original_idx}] Timeout operazione", "error")
+                        completed += 1
+                        errors    += 1
+
+                    except Exception as e:
+                        df.at[original_idx, "Result"]     = "X"
+                        df.at[original_idx, "Result_txt"] = str(e)
+                        self.log_message(
+                            f"[idx {original_idx}] Eccezione non gestita: {str(e)}", "error"
+                        )
+                        completed += 1
+                        errors    += 1
+
+        except Exception as critical_error:
+            # Errore bloccante (es. crash SAP, disconnessione di rete):
+            # i future ancora in coda vengono abbandonati, ma df contiene già
+            # i risultati delle FL elaborate fino a questo momento.
+            self.log_message(
+                f"Errore critico durante l'aggiornamento parallelo: {critical_error}",
+                "error"
+            )
+            self.log_message(
+                f"Dati parziali disponibili: {completed}/{total} FL elaborate prima dell'interruzione",
+                "warning"
+            )
+            return False, df  # df parziale: righe elaborate hanno Result valorizzato,
+                               # righe non ancora elaborate hanno Result = ""
+
+        self.log_message(
+            f"Aggiornamento completato: {completed - errors}/{total} OK, {errors} errori",
+            "success" if errors == 0 else "warning"
+        )
+        return True, df
 
 #-----------------------------------------------------------------------------
 # Metodi per la gestione della clipboard

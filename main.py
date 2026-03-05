@@ -4,37 +4,48 @@ import os
 import sys
 import pandas as pd
 from datetime import datetime
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout,
                            QHBoxLayout, QWidget, QTextEdit, QListWidget, QLabel, QMessageBox,
-                           QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QListWidgetItem, QStyle, QMenu, QAction)
+                           QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QCursor
-import SAP_Connection
-import SAP_Transactions
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont, QTextCursor
+
+from sap.session_manager import SAPSessionManager
+from sap.operations import SAPOperations
+from core.thread_manager import ThreadManager
+from core.base_component import BaseComponent # Importa la classe per utilizzo omogeneo del logging
+from core.logger import ThreadSafeLogger
+#import SAP_Connection
+from SAP_Transactions import SAPDataExtractor
 from typing import Tuple, Optional, Dict
 
-import logging
+from config.settings import AppSettings
 
-# Configurazione base del logging per tutta l'applicazione
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("app.log"),
-        logging.StreamHandler()
-    ]
-)
+# import logging
 
-# Logger specifico per questo modulo
-logger = logging.getLogger("main").setLevel(logging.DEBUG)
+# # Configurazione base del logging per tutta l'applicazione
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+#     handlers=[
+#         logging.FileHandler("app.log"),
+#         logging.StreamHandler()
+#     ]
+# )
 
-class MainWindow(QMainWindow):
+# # Logger specifico per questo modulo
+# logger = logging.getLogger("main").setLevel(logging.DEBUG)
+
+class MainWindow(QMainWindow, BaseComponent):
     def __init__(self):
-        super().__init__()
-        # Inizializza l'interfaccia utente
-        self.setWindowTitle("Aggiorna valori FL")
-        self.setGeometry(100, 100, 1000, 600)
-        self.init_ui()
+        #super().__init__()
+        QMainWindow.__init__(self)
+        logger = ThreadSafeLogger() # Creo un logger thread-safe
+        BaseComponent.__init__(self, logger) # Inizializzo senza logger, lo assegno dopo        
+
+        
         # Ottiene il percorso della directory del file Python corrente
         self.current_dir = os.path.dirname(os.path.abspath(__file__))
         # Inizializza variabili per memorizzare informazioni sulla connessione SAP
@@ -52,7 +63,24 @@ class MainWindow(QMainWindow):
         self.fl_dictionary = {} # Dizionario per memorizzare le FL dalla finestra di testo a sx
         self.fl_df_tot = pd.DataFrame()  # DataFrame per memorizzare tutti i dati estratti
 
+        # Inizializza componenti per il MultiThreaD
+        self.session_manager = None
+        self.thread_manager = None # Inizializzato in initialize_sap_components()
+        self.sap_operations = None      
+
+        # Setup GUI
+        self.init_ui()          
+
+        # Setup timer per processare log dalla coda
+        self.log_timer = QTimer()
+        self.log_timer.timeout.connect(self.process_log_queue)
+        self.log_timer.start(100)  # Controlla ogni 100ms
+
+
     def init_ui(self):
+        # Inizializza l'interfaccia utente
+        self.setWindowTitle("Aggiorna valori FL")
+        self.setGeometry(100, 100, 1000, 600)
         # Widget centrale
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -81,26 +109,24 @@ class MainWindow(QMainWindow):
         right_panel = QVBoxLayout()
         right_label = QLabel("Log operazioni:")
         right_panel.addWidget(right_label)
-        
-        self.log_list = QListWidget()
 
-        # Imposta altezza uniforme per tutti gli elementi
-        self.log_list.setUniformItemSizes(True)
+        # Area di testo per il log
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QFont(AppSettings.LOG_FONT, AppSettings.LOG_FONT_SIZE))
         
-        # Imposta spaziatura tra gli elementi
-        self.log_list.setSpacing(2)  # 2 pixel di spazio tra le righe
-        
-        # Imposta font più leggibile (opzionale)
-        font = self.log_list.font()
-        font.setPointSize(9)  # Aumenta dimensione font
-        self.log_list.setFont(font)
+        # Configura il formato del blocco per aumentare lo spacing
+        cursor = self.log_text.textCursor()
+        block_format = cursor.blockFormat()
+        block_format.setLineHeight(110, 1)  # % dell'altezza normale (tipo 1 = percentuale)
+        cursor.setBlockFormat(block_format)
+        self.log_text.setTextCursor(cursor)
 
-
-        right_panel.addWidget(self.log_list)
+        right_panel.addWidget(self.log_text)
 
         # Attiva il menu contestuale per il widget dei log
-        self.log_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.log_list.customContextMenuRequested.connect(self.show_context_menu)        
+        self.log_text.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.log_text.customContextMenuRequested.connect(self.show_context_menu)        
         
         # Aggiungi il layout destro al layout orizzontale
         content_layout.addLayout(right_panel)
@@ -129,6 +155,29 @@ class MainWindow(QMainWindow):
         
         # Aggiungi il layout dei bottoni al layout principale
         main_layout.addLayout(button_layout)
+
+    def process_log_queue(self):
+        """
+        Processa i messaggi dalla coda thread-safe
+        
+        Questo è l'UNICO metodo che scrive nel QTextEdit
+        Viene chiamato dal timer ogni 100ms
+        """
+        messages = self.logger.process_queue()
+        
+        for timestamp, message, msg_type in messages:
+            formatted_message = f"[{timestamp}] {message}"
+            color = ThreadSafeLogger.get_color_for_type(msg_type)
+            
+            # Scrivi nel widget
+            self.log_text.setTextColor(color)
+            self.log_text.append(formatted_message)
+        
+        if messages:
+            # Scroll automatico
+            cursor = self.log_text.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self.log_text.setTextCursor(cursor)        
     
     # ----------------------------------------------------
     # Funzioni per mostrare un menu contestuale x copiare i dati
@@ -137,10 +186,11 @@ class MainWindow(QMainWindow):
         # Crea menu contestuale
         context_menu = QMenu()
         
-        # Aggiungi l'azione "Copia"
-        copy_action = QAction("Copia elemento", self)
-        copy_action.triggered.connect(self.copy_selected_items)
-        context_menu.addAction(copy_action)
+        # Aggiungi l'azione "Copia selezione" (solo se c'è testo selezionato)
+        if self.log_text.textCursor().hasSelection():
+            copy_action = QAction("Copia selezione", self)
+            copy_action.triggered.connect(self.copy_selected_items)
+            context_menu.addAction(copy_action)
         
         # Aggiungi l'azione "Copia tutto"
         copy_all_action = QAction("Copia tutto", self)
@@ -151,31 +201,30 @@ class MainWindow(QMainWindow):
         context_menu.exec_(QCursor.pos())
 
     def copy_selected_items(self):
-        # Copia solo gli elementi selezionati
-        selected_items = self.log_list.selectedItems()
-        if selected_items:
-            text = "\n".join(item.text() for item in selected_items)
-            QApplication.clipboard().setText(text)
-            print("Elementi selezionati copiati negli appunti")        
+        # Usa il metodo copy() integrato di QTextEdit
+        if self.log_text.textCursor().hasSelection():
+            self.log_text.copy()  # Copia automaticamente nella clipboard
+            print("Testo selezionato copiato negli appunti")
+        else:
+            print("Nessun testo selezionato")
 
     def copy_all_items(self):
-        # Copia tutti gli elementi
-        all_items = []
-        for i in range(self.log_list.count()):
-            all_items.append(self.log_list.item(i).text())
+        # Copia tutto il contenuto del QTextEdit
+        all_text = self.log_text.toPlainText()
         
-        text = "\n".join(all_items)
-        QApplication.clipboard().setText(text)
-        print("Tutti gli elementi copiati negli appunti")        
+        # Controlla se c'è testo da copiare
+        if all_text.strip():  # Verifica che non sia vuoto o contenga solo spazi
+            QApplication.clipboard().setText(all_text)
+            print("Tutto il testo copiato negli appunti")
+        else:
+            print("Nessun testo da copiare")    
 
 
     def log_message(self, message, icon_type='info'):
         """
-        Aggiunge un messaggio al log senza icone
+        Wrapper per SAPDataExtractor: delega a self.log() che usa il ThreadSafeLogger.
         """
-        item = QListWidgetItem(message)
-        self.log_list.addItem(item)
-        self.log_list.scrollToBottom()
+        self.log(message, icon_type)
 
     # def log_message(self, message, icon_type='info'):
     #     """
@@ -195,8 +244,8 @@ class MainWindow(QMainWindow):
     #     elif icon_type == 'loading':
     #         item.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
         
-    #     self.log_list.addItem(item)
-    #     self.log_list.scrollToBottom()
+    #     self.log_text.addItem(item)
+    #     self.log_text.scrollToBottom()
 
 
     """ 
@@ -213,16 +262,16 @@ class MainWindow(QMainWindow):
                 'loading': '⏳'
             }  
             icon = icons.get(icon_type, '')
-            self.log_list.addItem(f"{icon} {message}")
-            self.log_list.scrollToBottom()
+            self.log_text.addItem(f"{icon} {message}")
+            self.log_text.scrollToBottom()
     """    
 
     def clear_windows(self):
         self.clipboard_area.clear()
-        self.log_list.clear()
+        self.log_text.clear()
         self.extract_button.setEnabled(True)
         self.upload_button.setEnabled(False)
-        self.log_message("Finestre pulite")
+        self.log("Finestre pulite")
         # Elimino i dati memorizzati da estrazioni precedenti
         self.fl_dictionary = {}
         self.fl_df_tot = pd.DataFrame()
@@ -264,21 +313,53 @@ class MainWindow(QMainWindow):
                     fl_errors += error_msg               
 
             except Exception as e:
-                self.log_message(f"Errore nel processare la riga {i}: {str(e)}", 'error')
+                self.log(f"Errore nel processare la riga {i}: {str(e)}", 'error')
                 return False, None
         # Se ci sono errori, mostra un messaggio di errore
         if fl_errors:
-            self.log_message(f"Validazione fallita: {fl_errors}", 'error')
+            self.log(f"Validazione fallita: {fl_errors}", 'error')
             return False, None
         else:
-            self.log_message("Validazione dati completata con successo", 'success')
+            self.log("Validazione dati completata con successo", 'success')
             if 'Mask_gen' in fl_dictionary:
-                self.log_message(f"FL gen = {len(fl_dictionary['Mask_gen'])}", 'info')
+                self.log(f"FL gen = {len(fl_dictionary['Mask_gen'])}", 'info')
                 if len(fl_dictionary.keys()) > 1:
-                    self.log_message(f"FL star = {len(fl_dictionary.keys()) -1}", 'info')
+                    self.log(f"FL star = {len(fl_dictionary.keys()) -1}", 'info')
             else:
-                self.log_message(f"FL star = {len(fl_dictionary.keys()) -1}", 'info')
+                self.log(f"FL star = {len(fl_dictionary.keys()) -1}", 'info')
             return True, fl_dictionary        
+
+    # ----------------------------------------------------
+    # Salvataggio dati parziali in caso di errore
+    # ----------------------------------------------------
+    def _save_partial_results(self, df_result):
+        """
+        Salva su file Excel i dati parzialmente elaborati prima di un'interruzione.
+        Viene chiamato sia su success=False che nell'except esterno di update_data().
+        Non solleva eccezioni: un fallimento del salvataggio viene solo loggato.
+        """
+        if df_result is None or df_result.empty:
+            self.log("Nessun dato parziale da salvare", 'warning')
+            return
+
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_Excel = f"FL_parziale_{timestamp}.xlsx"
+            elaborated = df_result[df_result["Result"] != ""].shape[0]
+            total      = len(df_result)
+            self.log(
+                f"Salvataggio dati parziali ({elaborated}/{total} FL elaborate): {file_Excel}",
+                'warning'
+            )
+            if self.save_excel_file_advanced(df_result, file_Excel,
+                                             sheet_name='Dati_parziali',
+                                             index=False,
+                                             overwrite=True):
+                self.log(f"Dati parziali salvati in: {file_Excel}", 'success')
+            else:
+                self.log("Impossibile salvare i dati parziali su file", 'error')
+        except Exception as save_err:
+            self.log(f"Errore durante il salvataggio dei dati parziali: {save_err}", 'error')
 
     # ----------------------------------------------------
     # Routine associata al tasto <Estrai Dati>
@@ -288,9 +369,13 @@ class MainWindow(QMainWindow):
         # Disabilito il tasto
         self.extract_button.setEnabled(False)
 
+        # Pre-inizializzato a None: se un'eccezione avviene prima dell'assegnazione
+        # il gestore di errori può comunque verificare se ci sono dati parziali da salvare.
+        df_result = None
+
         # ----------------------------------------------------
         # Validazione dati con maschere
-        # ----------------------------------------------------        
+        # ----------------------------------------------------
         if(True):
             # Prima verifica i dati nella finestra di testo sinistra (clipboard_area) che può contenere una lista di FL
             # oppure FL seguite dal carattere *
@@ -299,18 +384,22 @@ class MainWindow(QMainWindow):
             # FL con * - contiene un df vuoto che verrà popolato con le FL estratte con IH06
             result, self.fl_dictionary = self.validate_clipboard_data()
             if not result:
-                self.log_message("Dati inseriti non validi", 'error')
+                self.log("Dati inseriti non validi", 'error')
                 return
             # # Creo un dizionario che ha come chiavi i valori della lista data_string e come valori dei DataFrame vuoti
             # self.fl_dictionary = {item: pd.DataFrame() for item in data_string}
 
 
         # altrimenti estraggo i dati da SAP
-        self.log_message("Avvio connessione SAP...")
+        self.log("Avvio connessione SAP...")
         try:
-            with SAP_Connection.SAPGuiConnection() as sap:
-                if sap.is_connected():
-                    session = sap.get_session()
+            # Inizializza SOLO se non è già stato fatto
+            if not self.session_manager:
+                self.initialize_sap_components()
+
+
+            with self.session_manager.get_session() as session:
+                if session:
                     if session:
                         try:
                             self.infoUser = session.info.user
@@ -318,19 +407,18 @@ class MainWindow(QMainWindow):
                             self.infoClient = session.info.client
                             self.infoLanguage = session.info.language
 
-                            self.log_message(f"ID utente:  {self.infoUser}", 'info')
-                            self.log_message(f"System Name: {self.infoSystemName}", 'info')
-                            self.log_message(f"Mandante: {self.infoClient}", 'info')
-                            self.log_message(f"Lingua:  {self.infoLanguage}", 'info')
+                            self.log(f"ID utente:  {self.infoUser}", 'info')
+                            self.log(f"System Name: {self.infoSystemName}", 'info')
+                            self.log(f"Mandante: {self.infoClient}", 'info')
+                            self.log(f"Lingua:  {self.infoLanguage}", 'info')
                         except Exception as e:
-                            self.log_message(f"Errore lettura info SAP: {str(e)}", 'error')
+                            self.log(f"Errore lettura info SAP: {str(e)}", 'error')
                             return                        
-                        self.log_message("Connessione SAP attiva", 'success')
-                        # Eseguo l'estrazione dei dati                        
-                        extractor = SAP_Transactions.SAPDataExtractor(session, self)
+                        self.log("Connessione SAP attiva", 'success')
+                        extractor = SAPDataExtractor(session, self)
                         # Eseguo l'estrazione dei dati per ogni FL iterando per le chiavi del dizionario
                         if not self.fl_dictionary:
-                            self.log_message("Nessuna FL da estrarre", 'warning')   
+                            self.log("Nessuna FL da estrarre", 'warning')   
                             return
                         # Itero attraverso le chiavi del dizionario per ottenere tutte le liste di FL necessarie escludendo quelle che non sono in stato CRT
                         for key in self.fl_dictionary.keys():
@@ -338,11 +426,11 @@ class MainWindow(QMainWindow):
                             ### Estraggo tutte le FL che corrispondono all FL con * contenuta come chiave Utilizzo IH06
                             # Rimuovo le FL che non sono in stato CRT (in base alla lingua della sessione SAP)
                             if key != 'Mask_gen':
-                                self.log_message("Estrazione dati FL contenenti *", 'loading')
+                                self.log("Estrazione dati FL contenenti *", 'loading')
                                 success, df = extractor.extract_FL_list(key)
                             else:
-                                self.log_message("Estrazione lista FL", 'loading')
-                                stringa = '\r\n'.join(self.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip()) # extract_FL_list deve ricevere come argomento una stringa 
+                                self.log("Estrazione lista FL", 'loading')
+                                stringa = '\r\n'.join(self.fl_dictionary[key]['Sede tecnica'].astype(str).str.strip()) # extract_FL_list deve ricevere come argomento una stringa
                                 success, df = extractor.extract_FL_list(stringa)
                             if success:                                
                                 # Modifico l'intestazione delle colonne del df mettendola in lingua IT
@@ -355,30 +443,30 @@ class MainWindow(QMainWindow):
                                     return
                                 # Aggiungo i dati ottenuti al dizionario                               
                                 self.fl_dictionary[key] = df_renamed
-                                self.log_message(f"Estrazione FL {key} riuscita!", 'success')
+                                self.log(f"Estrazione FL {key} riuscita!", 'success')
                             else:
-                                self.log_message(f"Errore durante l'estrazione della FL: {key}", 'error')
+                                self.log(f"Errore durante l'estrazione della FL: {key}", 'error')
                                 return False    
                         # ottenute le liste di FL, procedo con l'estrazione dei dati con la transazione IFLO
                         for key in self.fl_dictionary.keys():
-                            self.log_message("Inizio estrazione dati lista FL", 'loading') 
+                            self.log("Inizio estrazione dati lista FL", 'loading') 
                             
                             ### Estraggo i dati delle FL per ciascuna lista relativa ad una chiave
                             success, df = extractor.extract_FL_IFLO(self.fl_dictionary[key])
                             
                             if success:
-                                self.log_message(f"Estratte {len(df)} FL per {key}", 'success')
+                                self.log(f"Estratte {len(df)} FL per {key}", 'success')
                                 # Concateno i dati estratti al df totale
                                 if self.fl_df_tot.empty:
                                     self.fl_df_tot = df.copy()
                                 else:
                                     self.fl_df_tot = pd.concat([self.fl_df_tot, df], ignore_index=True)
                             else:
-                                self.log_message(f"Errore durante l'estrazione delle FL", 'error')
+                                self.log(f"Errore durante l'estrazione delle FL", 'error')
                                 return
 
-                        self.log_message("Estrazioni completata con successo", 'success')
-                        self.log_message(f"Totale FL estratte = {len(self.fl_df_tot)}", 'success')
+                        self.log("Estrazioni completata con successo", 'success')
+                        self.log(f"Totale FL estratte = {len(self.fl_df_tot)}", 'success')
 
                         # Modifico l'intestazione delle colonne del df mettendola in lingua IT
                         try:
@@ -392,15 +480,15 @@ class MainWindow(QMainWindow):
                         # Creo il nome del file per salvare i dati
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         file_Excel = f"FL_estratte_" + timestamp + ".xlsx"
-                        self.log_message(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
+                        self.log(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
                         # Salvo il DataFrame in un file Excel
                         if self.save_excel_file_advanced(df_renamed, file_Excel,
                                                         sheet_name='Dati_estratti',
                                                         index=False,
                                                         overwrite=True):
-                            self.log_message("File Excel salvato con successo", 'success')
+                            self.log("File Excel salvato con successo", 'success')
                         else:
-                            self.log_message("Errore durante il salvataggio del file Excel", 'error')                            
+                            self.log("Errore durante il salvataggio del file Excel", 'error')                            
 
                                 
                         ### Verifico che il df  contenga fl con lingua attualmente in uso nella sessione di SAP
@@ -408,7 +496,7 @@ class MainWindow(QMainWindow):
                         if result:
                                 
                                 ### Aggiorno i valori delle fl contenute nel df
-                                success, df_result = extractor.update_FL(df_filtrato)
+                                success, df_result = extractor.update_FL_parallel(df_filtrato, self.session_manager, n_workers=4)
 
                                 if success:
                                     # creo una statistica degli aggiornamenti eseguiti
@@ -419,28 +507,30 @@ class MainWindow(QMainWindow):
                                     # Creo il nome del file per salvare i dati
                                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                                     file_Excel = f"FL_aggiornate_" + timestamp + ".xlsx"
-                                    self.log_message(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
+                                    self.log(f"Salvo i dati in un file excel:\n     {file_Excel}", 'success')
                                     # Salvo il DataFrame in un file Excel
                                     if self.save_excel_file_advanced(df_result, file_Excel,
                                                                     sheet_name='Dati_modificati',
                                                                     index=False,
                                                                     overwrite=True):
-                                        self.log_message("File Excel salvato con successo", 'success')
+                                        self.log("File Excel salvato con successo", 'success')
                                     else:
-                                        self.log_message("Errore durante il salvataggio del file Excel", 'error')
+                                        self.log("Errore durante il salvataggio del file Excel", 'error')
                                 else:
-                                    self.log_message("Errore durante l'aggiornamento delle fl", 'error')                           
+                                    self.log("Aggiornamento interrotto — salvataggio dati parziali", 'warning')
+                                    self._save_partial_results(df_result)
                         else:
-                            self.log_message("Errore durante l'elaborazione del df", 'error')
+                            self.log("Errore durante l'elaborazione del df", 'error')
 
-                    self.log_message("Elaborazione terminata", 'success')
+                    self.log("Elaborazione terminata", 'success')
 
                 else:
-                    self.log_message("Connessione SAP NON attiva", 'error')
+                    self.log("Connessione SAP NON attiva", 'error')
                     return
         except Exception as e:
-            self.log_message(f"Estrazione dati SAP: Errore: {str(e)}", 'error')
-            return    
+            self.log(f"Estrazione dati SAP: Errore: {str(e)}", 'error')
+            self._save_partial_results(df_result)
+            return
 
         # ----------------------------------------------------
         # Verifica completata - ripristino il tasto di estrazione dei dati
@@ -450,7 +540,7 @@ class MainWindow(QMainWindow):
 
 
     # ----------------------------------------------------
-    # Modifica l' intestazione di un df
+    # Modifica l'intestazione di un df
     # ---------------------------------------------------- 
 
     def rename_columns_safely(self, df, new_column_names, inplace=False):
@@ -613,7 +703,7 @@ class MainWindow(QMainWindow):
             df_filtrato (pd.DataFrame): DataFrame filtrato con i soli valori appartenenti alla lingua indicata
         """
         
-        self.log_message(f"✅ Lingua selezionata: {lang}", 'success')
+        self.log(f"✅ Lingua selezionata: {lang}", 'success')
                          
         try:
             if 'L_1' not in df.columns:
@@ -623,7 +713,7 @@ class MainWindow(QMainWindow):
                 raise ValueError("DataFrame originale è vuoto")
             
             # Debug: mostra valori unici
-            self.log_message(f"Valori lingua presenti: {df['L_1'].unique()}", 'info')
+            self.log(f"Valori lingua presenti: {df['L_1'].unique()}", 'info')
             print(f"🔍 Valori unici in L_1: {df['L_1'].unique()}")
             
             # Filtra usando il parametro lang (non hardcoded)
@@ -631,21 +721,21 @@ class MainWindow(QMainWindow):
             
             # Risultati
             if len(df_filtrato) == 0:
-                self.log_message(f"Nessun valore per lingua = {lang}", 'error')
+                self.log(f"Nessun valore per lingua = {lang}", 'error')
                 print(f"❌ Nessun record con L_1 = {lang} trovato")
                 raise ValueError(f"Nessun valore trovato per {lang}")
             else:
-                self.log_message(f"Filtro completato. {len(df_filtrato)} elementi trovati", 'success')  # Fixed typo
+                self.log(f"Filtro completato. {len(df_filtrato)} elementi trovati", 'success')  # Fixed typo
                 print(f"✅ Filtro completato: {len(df_filtrato)} elementi trovati")
                 return True, df_filtrato
                 
         except (KeyError, ValueError) as e:
             # Gestisci errori specifici
-            self.log_message(f"Errore nella verifica lingua: {e}", 'error')
+            self.log(f"Errore nella verifica lingua: {e}", 'error')
             print(f"❌ Errore: {e}")
         except Exception as e:
             # Gestisci errori imprevisti
-            self.log_message(f"Errore imprevisto: {e}", 'error')
+            self.log(f"Errore imprevisto: {e}", 'error')
             print(f"❌ Errore imprevisto: {e}")
         
         return False, None
@@ -678,12 +768,12 @@ class MainWindow(QMainWindow):
         try:
             # Verifica che il DataFrame non sia vuoto
             if df.empty:
-                self.log_message(f"DataFrame vuoto.\nSalvataggio di {filename} non eseguito!", 'error')
+                self.log(f"DataFrame vuoto.\nSalvataggio di {filename} non eseguito!", 'error')
                 return False
             
             # Controlla se il file esiste già
             if file_path.exists() and not overwrite:
-                self.log_message(f"File {filename} già esistente. \nSalvataggio non eseguito!", 'error')
+                self.log(f"File {filename} già esistente. \nSalvataggio non eseguito!", 'error')
                 return False
             
             # Crea la directory se non esiste
@@ -702,16 +792,88 @@ class MainWindow(QMainWindow):
             return True
             
         except PermissionError:
-            self.log_message(f"Permessi insufficienti per scrivere il file: {filename}", 'error')
+            self.log(f"Permessi insufficienti per scrivere il file: {filename}", 'error')
             return False
             
         except FileNotFoundError:
-            self.log_message(f"Percorso non trovato: {file_path.parent}", 'error')
+            self.log(f"Percorso non trovato: {file_path.parent}", 'error')
             return False
             
         except Exception as e:
-            self.log_message(f"Errore durante il salvataggio di {filename}: {str(e)}", 'error')
+            self.log(f"Errore durante il salvataggio di {filename}: {str(e)}", 'error')
             return False
+        
+
+    #-----------------------------------------------------------------------------
+    # Funzioni per il MultiThread
+    #-----------------------------------------------------------------------------
+    
+    def initialize_sap_components(self):
+        """Inizializza i componenti SAP"""
+        try:
+            self.log("Inizializzazione componenti SAP...", "info")
+            
+            # Crea session manager
+            self.session_manager = SAPSessionManager(
+                max_sessions=AppSettings.MAX_SAP_SESSIONS,
+                connection_index=AppSettings.SAP_CONNECTION_INDEX,
+                logger = self.logger
+            )
+            
+            # Inizializza sessioni
+            if not self.session_manager.initialize_sessions():
+                raise Exception("Impossibile inizializzare le sessioni SAP")
+            
+            # Crea operations manager
+            self.sap_operations = SAPOperations(logger=self.logger)
+            
+            # Crea thread manager
+            self.thread_manager = ThreadManager(
+                session_manager=self.session_manager,
+                logger=self.logger
+            )
+            
+            self.log("Componenti SAP inizializzati con successo", "success")
+        
+        except Exception as e:
+            error_msg = str(e)
+            self.log(f"Errore inizializzazione SAP: {error_msg}", "error")
+            
+            # Suggerimenti per l'utente
+            self.log("", "info")
+            self.log("Verifica che:", "warning")
+            self.log("  1. SAP GUI sia aperto", "warning")
+            self.log("  2. Sei loggato in almeno una sessione", "warning")
+            self.log("  3. Lo scripting sia abilitato in SAP", "warning")
+        
+            raise
+    
+    def execute_sap_extraction_impianti(self)  -> tuple[bool, str|None]:
+        """
+        Estrae la lista degli impianti, per la tecnologia specificata, da SAP
+        
+        Returns:
+            Tupla (successo, dati) dove:
+            - successo: bool - True se operazione riuscita
+            - dati: stringa - Stringa contenente lista degli impianti o None se errore
+        """
+        self.log("Avvio elaborazione...", "info")
+        
+        with self.session_manager.get_session() as session:
+            if session:
+                # STEP 1 Ricava lista FL
+                # Ricavo lista degli impianti SingleThread
+                str_impianti = self.sap_operations.ricava_lista_impianti(session, self.tecnologia)             
+                if not str_impianti:
+                    self.log("Impossibile ricavare la lista FL", "error")
+                    return False, None
+            else:
+                self.log("Sessione SAP non disponibile", "error")
+                return False, None
+        
+        self.log("Lista impianti ricavata con successo!", "success")
+        return True, str_impianti
+
 
 def main():
     app = QApplication(sys.argv)
