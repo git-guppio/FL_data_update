@@ -326,8 +326,9 @@ class MainWindow(QMainWindow, BaseComponent):
         self.sap_operations  = None
         self.sap_worker      = None
 
-        # Variabili per il timer elapsed
-        self.start_time    = None
+        # Variabili per il timer elapsed e ETA
+        self.start_time       = None
+        self._fl_timestamps   = deque(maxlen=50)
         self.elapsed_timer = QTimer()
         self.elapsed_timer.timeout.connect(self._update_elapsed)
 
@@ -478,7 +479,7 @@ class MainWindow(QMainWindow, BaseComponent):
 
             # --- ETA con media mobile (ultime 50 FL) ---
             self._fl_timestamps.append(datetime.now())
-            min_sample = max(10, int(total * 0.02))
+            min_sample = 10
             if len(self._fl_timestamps) >= min_sample and completed < total:
                 window_sec = (
                     self._fl_timestamps[-1] - self._fl_timestamps[0]
