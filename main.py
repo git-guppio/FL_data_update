@@ -982,8 +982,15 @@ class MainWindow(QMainWindow, BaseComponent):
             # Crea la directory se non esiste
             file_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # Trim spazi iniziali/finali su tutte le colonne stringa
+            df_to_save = df.copy()
+            str_cols = df_to_save.select_dtypes(include='object').columns
+            df_to_save[str_cols] = df_to_save[str_cols].apply(
+                lambda col: col.str.strip()
+            )
+
             # Salva il DataFrame in Excel
-            df.to_excel(
+            df_to_save.to_excel(
                 file_path,
                 sheet_name=sheet_name,
                 index=index,
