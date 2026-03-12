@@ -12,6 +12,9 @@ REM ============================================================================
 
 setlocal
 
+REM Fix: rende i file .py eseguibili direttamente da CMD (richiesto da Nuitka internamente)
+set PATHEXT=%PATHEXT%;.PY
+
 echo.
 echo ============================================================
 echo  FL_data_update - Build Script
@@ -38,15 +41,23 @@ if not defined VIRTUAL_ENV (
     echo       Venv gia' attivo: %VIRTUAL_ENV%
 )
 
-REM --- Step 2: Verifica Nuitka ---
+REM --- Step 2: Verifica Nuitka e zstandard ---
 echo.
 echo [2/4] Verifica installazione Nuitka...
 python -m nuitka --version >nul 2>&1
 if errorlevel 1 (
     echo.
     echo [ERRORE] Nuitka non trovato. Installare con:
-    echo         pip install nuitka
+    echo         pip install "nuitka[onefile]"
     goto :error
+)
+python -c "import zstandard" >nul 2>&1
+if errorlevel 1 (
+    echo       zstandard non trovato - installazione in corso...
+    pip install "nuitka[onefile]" --quiet
+    echo       zstandard installato.
+) else (
+    echo       zstandard                  OK
 )
 for /f "tokens=*" %%v in ('python -m nuitka --version 2^>^&1') do (
     echo       Nuitka versione: %%v
@@ -92,7 +103,7 @@ echo.
 python -m nuitka ^
     --onefile ^
     --enable-plugin=pyqt5 ^
-    --windows-disable-console ^
+    --windows-console-mode=disable ^
     --windows-icon-from-ico=dist\my_icon.ico ^
     --include-package=win32com ^
     --include-package=win32api ^
