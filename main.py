@@ -5,12 +5,6 @@ import sys
 import pandas as pd
 from datetime import datetime, date
 from collections import deque
-
-# =============================================================================
-# DATA DI SCADENZA DELL'APPLICAZIONE
-# Modificare questa costante per aggiornare la data limite di utilizzo.
-# =============================================================================
-EXPIRY_DATE = date(2026, 4, 30)
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout,
                            QHBoxLayout, QWidget, QTextEdit, QListWidget, QLabel, QMessageBox,
                            QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction,
@@ -28,6 +22,12 @@ from SAP_Transactions import SAPDataExtractor
 from typing import Tuple, Optional, Dict
 
 from config.settings import AppSettings
+
+# =============================================================================
+# DATA DI SCADENZA DELL'APPLICAZIONE
+# Modificare questa costante per aggiornare la data limite di utilizzo.
+# =============================================================================
+EXPIRY_DATE = date(2026, 4, 30)
 
 # import logging
 
