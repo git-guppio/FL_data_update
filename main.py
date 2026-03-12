@@ -866,28 +866,26 @@ class MainWindow(QMainWindow, BaseComponent):
         """
         # Verifica che la colonna esista
         if "Result" not in df.columns:
-            print("\n❌ Colonna 'Result' non trovata")
+            self.log("Colonna 'Result' non trovata", 'error')
             return False
-        
+
         # Conta tutti i caratteri (escludendo NaN)
         all_chars = df["Result"].dropna().astype(str)
         total_values = len(all_chars)
-        
+
         if total_values == 0:
-            print("\n⚠️ Nessun valore valido nella colonna Result")
+            self.log("Nessun valore valido nella colonna Result", 'warning')
             return False
-        
+
         # Conta la frequenza di ogni carattere
         char_counts = all_chars.value_counts()
-        
-        print(f"\n📊 Analisi caratteri colonna 'Result' ({total_values} valori totali):")
-        print("-" * 50)
-        
+
+        self.log(f"Analisi colonna 'Result' ({total_values} valori totali):", 'info')
         for char, count in char_counts.items():
             percentage = (count / total_values) * 100
-            print(f"'{char}': {count:>4} occorrenze ({percentage:>5.1f}%)")
-        
-        return True        
+            self.log(f"  '{char}': {count:>4} occorrenze ({percentage:>5.1f}%)", 'info')
+
+        return True
 
     #-----------------------------------------------------------------------------
     # Filtra il df in base alla lingua indicata
