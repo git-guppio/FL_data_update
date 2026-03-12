@@ -54,21 +54,26 @@ for /f "tokens=*" %%v in ('python -m nuitka --version 2^>^&1') do (
 )
 :nuitka_ok
 
-REM --- Step 3: Verifica file sorgente e icona ---
+REM --- Step 3: Verifica file necessari ---
 echo.
 echo [3/4] Verifica file necessari...
 if not exist "main.py" (
     echo [ERRORE] main.py non trovato nella directory corrente.
     goto :error
 )
-echo       main.py          OK
+echo       main.py                                    OK
+
 if not exist "dist\my_icon.ico" (
-    echo       dist\my_icon.ico NON TROVATO - build prosegue senza icona
-    set ICON_OPT=
-) else (
-    echo       dist\my_icon.ico OK
-    set ICON_OPT=--windows-icon-from-ico=dist\my_icon.ico
+    echo [ERRORE] dist\my_icon.ico non trovato. Eseguire prima make_icon.py.
+    goto :error
 )
+echo       dist\my_icon.ico                           OK
+
+if not exist "config\GruppoResponsabilePianificazione.csv" (
+    echo [ERRORE] config\GruppoResponsabilePianificazione.csv non trovato.
+    goto :error
+)
+echo       config\GruppoResponsabilePianificazione.csv OK
 
 REM --- Step 4: Compilazione ---
 echo.
@@ -88,13 +93,14 @@ python -m nuitka ^
     --onefile ^
     --enable-plugin=pyqt5 ^
     --windows-disable-console ^
-    %ICON_OPT% ^
+    --windows-icon-from-ico=dist\my_icon.ico ^
     --include-package=win32com ^
     --include-package=win32api ^
     --include-package=pywintypes ^
     --include-package=sap ^
     --include-package=core ^
     --include-package=config ^
+    --include-data-files=config\GruppoResponsabilePianificazione.csv=config\GruppoResponsabilePianificazione.csv ^
     --output-dir=dist ^
     --output-filename=FL_data_update ^
     --show-progress ^
