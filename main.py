@@ -3,8 +3,14 @@ from pathlib import Path
 import os
 import sys
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 from collections import deque
+
+# =============================================================================
+# DATA DI SCADENZA DELL'APPLICAZIONE
+# Modificare questa costante per aggiornare la data limite di utilizzo.
+# =============================================================================
+EXPIRY_DATE = date(2026, 4, 30)
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout,
                            QHBoxLayout, QWidget, QTextEdit, QListWidget, QLabel, QMessageBox,
                            QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction,
@@ -1085,6 +1091,16 @@ class MainWindow(QMainWindow, BaseComponent):
 
 def main():
     app = QApplication(sys.argv)
+
+    if date.today() > EXPIRY_DATE:
+        QMessageBox.critical(
+            None,
+            "Applicazione scaduta",
+            f"Questo programma non è più utilizzabile dopo il {EXPIRY_DATE.strftime('%d/%m/%Y')}.\n"
+            "Contattare l'amministratore per richiedere un aggiornamento."
+        )
+        sys.exit(1)
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
