@@ -5,12 +5,12 @@ REM
 REM Prerequisiti:
 REM   - Ambiente virtuale attivo (.venv) con Nuitka installato:
 REM       pip install "nuitka[onefile]"
-REM   - MinGW64 (se non presente, Nuitka lo scarica automaticamente
-REM     alla prima esecuzione)
+REM   - MSVC installato (Visual Studio Build Tools) - richiesto da Python 3.13+
 REM
 REM Output: dist\FL_data_update.exe
-REM Note:   Usa MinGW64 (--mingw64) invece di MSVC per produrre un exe
-REM         standalone senza dipendenze dalle DLL Visual C++ Runtime.
+REM Note:   Python 3.13+ non supporta MinGW64; viene usato MSVC.
+REM         Le macchine target devono avere Visual C++ Redistributable 2015-2022
+REM         (gia' presente su Windows 10/11 aziendali aggiornati).
 REM =============================================================================
 
 setlocal
@@ -97,8 +97,7 @@ echo       ATTENZIONE: la prima compilazione richiede 15-30 minuti.
 echo       Il terminale puo' sembrare bloccato durante le fasi di:
 echo         - Download del runtime Nuitka (solo prima volta)
 echo         - Analisi delle dipendenze
-echo         - Download MinGW64 se non presente (solo prima volta)
-echo         - Compilazione C con MinGW64 (GCC)
+echo         - Compilazione C con MSVC
 echo       E' normale: attendere il completamento.
 echo.
 echo ============================================================
@@ -106,7 +105,6 @@ echo.
 
 python -m nuitka ^
     --onefile ^
-    --mingw64 ^
     --enable-plugin=pyqt5 ^
     --windows-console-mode=disable ^
     --windows-icon-from-ico=dist\my_icon.ico ^
