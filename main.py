@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout
                            QDialog, QRadioButton, QButtonGroup, QDialogButtonBox, QMenu, QAction,
                            QProgressBar, QSpinBox, QCheckBox, QGroupBox, QFormLayout)
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtGui import QCursor, QFont, QTextCursor
+from PyQt5.QtGui import QCursor, QFont, QTextCursor, QIcon
 
 from sap.session_manager import SAPSessionManager
 from sap.operations import SAPOperations
@@ -1090,7 +1090,29 @@ class MainWindow(QMainWindow, BaseComponent):
 
 
 def main():
+    # Imposta AppUserModelID univoco: Windows usa questo ID per associare
+    # l'icona corretta nella taskbar invece di quella dell'interprete Python.
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            'Enel.FL_data_update.1.0'
+        )
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
+
+    # Icona finestra (barra del titolo + taskbar).
+    # In modalita' exe (Nuitka onefile): l'icona e' gia' incorporata nell'exe,
+    # QIcon(sys.executable) la estrae direttamente.
+    # In sviluppo (python main.py): fallback al file .ico in dist/.
+    icon = QIcon(sys.executable)
+    if icon.isNull():
+        ico_path = Path(__file__).parent / 'dist' / 'my_icon.ico'
+        if ico_path.exists():
+            icon = QIcon(str(ico_path))
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     if date.today() > EXPIRY_DATE:
         QMessageBox.critical(
