@@ -4,10 +4,13 @@ REM build.bat - Compila main.py in un singolo exe con Nuitka
 REM
 REM Prerequisiti:
 REM   - Ambiente virtuale attivo (.venv) con Nuitka installato:
-REM       pip install nuitka
-REM   - MSVC installato (Visual Studio Build Tools)
+REM       pip install "nuitka[onefile]"
+REM   - MinGW64 (se non presente, Nuitka lo scarica automaticamente
+REM     alla prima esecuzione)
 REM
 REM Output: dist\FL_data_update.exe
+REM Note:   Usa MinGW64 (--mingw64) invece di MSVC per produrre un exe
+REM         standalone senza dipendenze dalle DLL Visual C++ Runtime.
 REM =============================================================================
 
 setlocal
@@ -94,7 +97,8 @@ echo       ATTENZIONE: la prima compilazione richiede 15-30 minuti.
 echo       Il terminale puo' sembrare bloccato durante le fasi di:
 echo         - Download del runtime Nuitka (solo prima volta)
 echo         - Analisi delle dipendenze
-echo         - Compilazione C con MSVC
+echo         - Download MinGW64 se non presente (solo prima volta)
+echo         - Compilazione C con MinGW64 (GCC)
 echo       E' normale: attendere il completamento.
 echo.
 echo ============================================================
@@ -102,6 +106,7 @@ echo.
 
 python -m nuitka ^
     --onefile ^
+    --mingw64 ^
     --enable-plugin=pyqt5 ^
     --windows-console-mode=disable ^
     --windows-icon-from-ico=dist\my_icon.ico ^
